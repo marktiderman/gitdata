@@ -11,6 +11,12 @@
   "exports": {
     ".": "./src/index.js"
   },
+  "files": [
+    "src",
+    "README.md",
+    "CLAUDE.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "node --test \"test/**/*.test.js\""
   },
