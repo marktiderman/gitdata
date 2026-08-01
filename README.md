@@ -83,9 +83,29 @@ Two substitutions, deliberately no more: `{{name}}` joins a result set's first c
 **The engine does not know** what a "feature" is, or what your status values mean. That lives in
 your schemas and your views — which are yours.
 
+## SQL functions
+
+SQLite provides the query language; GitDATA adds a few scalar helpers for text work SQL cannot
+express. Each is domain-agnostic — the engine learns what a markdown section is, never what your
+data means.
+
+| function | does |
+| --- | --- |
+| `collapse_ws(text)` | fold whitespace runs to single spaces and trim — YAML block scalars span lines, a digest line does not |
+| `md_section(body, heading)` | pull one `## heading` section out of a file body and flatten it to a line |
+| `natural_key(text)` | sortable key for dotted ids, so `1.10` sorts after `1.9` rather than after `1.1` |
+
 ## Status
 
-Early. The rollup engine works and is proven byte-identical against a real 1,300-row corpus.
+Early, but proven. The rollup engine works and reproduces **three real views byte-for-byte**
+against a live 1,300-row corpus — including one that replaces a 998-line generator:
+
+| view | bytes | what it exercises |
+| --- | --- | --- |
+| `ccp-digest` | 3,167 | filter + sort + a prose-heavy template |
+| `cleanse-board` | 7,427 | aggregate counts + multiple tables + collapsing empty sections |
+| `cleanse-territories` | 25,725 | recursive tree + union of two tables + value mapping + a column derived from body text + orphan detection |
+
 `init` and `validate` are not built yet.
 
 ## License

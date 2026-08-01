@@ -92,6 +92,29 @@ describe("project + query", () => {
     assert.equal(query(db, "SELECT _body AS b FROM features WHERE id = 'GEN-001'")[0].b, "Alpha body.\n");
     db.close();
   });
+
+  test("md_section extracts a section, drops blanks and sub-headings, stops at the next ##", async () => {
+    const db = await project(load(join(root, "data")));
+    const body = "# Title\n\n## The job\nFirst line.\n\n### skip me\nSecond line.\n\n## Next\nNot this.\n";
+    const one = (sql, ...args) => query(db, sql.replace(/\?/g, () => `'${args.shift()}'`))[0].v;
+
+    assert.equal(one("SELECT md_section(?, 'The job') AS v", body.replace(/'/g, "''")), "First line. Second line.");
+    // a heading that is not present yields empty, never null-propagating garbage
+    assert.equal(one("SELECT md_section(?, 'Nope') AS v", body.replace(/'/g, "''")), "");
+    db.close();
+  });
+
+  test("natural_key sorts dotted ids numerically — 1.10 after 1.9, not after 1.1", async () => {
+    const db = await project(load(join(root, "data")));
+    const ordered = query(
+      db,
+      `SELECT c FROM (SELECT '1.2' AS c UNION ALL SELECT '1.10' UNION ALL SELECT '1.9'
+                      UNION ALL SELECT '1.1' UNION ALL SELECT '1.x.idea')
+       ORDER BY natural_key(c)`,
+    ).map((r) => r.c);
+    assert.deepEqual(ordered, ["1.1", "1.2", "1.9", "1.10", "1.x.idea"]);
+    db.close();
+  });
 });
 
 describe("render", () => {

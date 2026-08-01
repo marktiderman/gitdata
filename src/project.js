@@ -34,11 +34,53 @@ function collapseWs(value) {
   return String(value).replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Extract one markdown section from a body and flatten it to a single line.
+ *
+ * `md_section(body, 'The job')` returns the text under `## The job`, up to the next `##` heading,
+ * with blank lines and nested headings dropped and the remainder joined by spaces.
+ *
+ * Generic on purpose: the function knows what a markdown section is, never what "The job" means.
+ * Which heading to read is the view's business, i.e. the consumer's.
+ */
+function mdSection(body, heading) {
+  if (body == null || heading == null) return null;
+  const escaped = String(heading).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`^##\\s+${escaped}[^\\n]*\\n([\\s\\S]*?)(?=^##\\s|\\Z)`, "m").exec(String(body));
+  if (!match) return "";
+
+  return match[1]
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#"))
+    .join(" ");
+}
+
+/**
+ * A lexically sortable key for dotted identifiers, so `1.10` sorts after `1.9` rather than after
+ * `1.1`. Numeric segments are zero-padded and prefixed `0`; non-numeric segments are prefixed `1`
+ * so they sort after numbers at the same position.
+ */
+function naturalKey(value) {
+  if (value == null) return null;
+  return String(value)
+    .split(".")
+    .map((seg) => (/^\d+$/.test(seg) ? `0${seg.padStart(10, "0")}` : `1${seg}`))
+    .join(".");
+}
+
 export async function project(tables) {
   const sqlite3 = await sqlite3InitModule({ print: () => {}, printErr: () => {} });
   const db = new sqlite3.oo1.DB(":memory:");
 
+  // Scalar helpers for the text work SQL cannot express. Each is domain-agnostic — the engine
+  // learns what a markdown section or a dotted id is, never what a "feature" or "The job" is.
   db.createFunction("collapse_ws", (_ctx, v) => collapseWs(v), { arity: 1, deterministic: true });
+  db.createFunction("md_section", (_ctx, body, heading) => mdSection(body, heading), {
+    arity: 2,
+    deterministic: true,
+  });
+  db.createFunction("natural_key", (_ctx, v) => naturalKey(v), { arity: 1, deterministic: true });
 
   for (const { name, rows } of tables.values()) {
     const columns = [...new Set(rows.flatMap(Object.keys))];
