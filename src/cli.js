@@ -8,24 +8,56 @@
  */
 import { resolve } from "node:path";
 
+import { init, listPacks } from "./init.js";
 import { rollup } from "./rollup.js";
 
 const USAGE = `gitdata — docs as data in git
 
-  gitdata rollup [--check] [--root <dir>]   regenerate views | report drift without writing
+  gitdata init --pack <name> [--root <dir>]  scaffold a pack's tables, templates and views
+  gitdata rollup [--check] [--root <dir>]    regenerate views | report drift without writing
+  gitdata packs                              list available packs
 
 Options:
-  --root <dir>   repo root (default: cwd). Data is read from <root>/data.
+  --root <dir>   repo root (default: cwd). Data lives in <root>/data.
 `;
 
 function parseArgs(argv) {
-  const args = { command: argv[0], check: argv.includes("--check"), root: process.cwd() };
-  const i = argv.indexOf("--root");
-  if (i !== -1) {
-    if (!argv[i + 1]) throw new Error("--root requires a directory");
-    args.root = resolve(argv[i + 1]);
+  const args = { command: argv[0], check: argv.includes("--check"), root: process.cwd(), pack: null };
+  for (const [flag, key] of [["--root", "root"], ["--pack", "pack"]]) {
+    const i = argv.indexOf(flag);
+    if (i === -1) continue;
+    if (!argv[i + 1] || argv[i + 1].startsWith("--")) throw new Error(`${flag} requires a value`);
+    args[key] = key === "root" ? resolve(argv[i + 1]) : argv[i + 1];
   }
   return args;
+}
+
+function cmdPacks() {
+  const packs = listPacks();
+  if (packs.length === 0) {
+    console.log("  no packs bundled");
+    return 0;
+  }
+  for (const p of packs) console.log(`  ${p.name.padEnd(22)} ${p.title ?? ""}`);
+  console.log(`\n  install one:  gitdata init --pack ${packs[0].name}`);
+  return 0;
+}
+
+function cmdInit({ root, pack }) {
+  if (!pack) throw new Error("init requires --pack <name>  (see `gitdata packs`)");
+  const { written, skipped } = init({ root, pack });
+
+  for (const f of written) console.log(`  ✎ ${f}`);
+  for (const f of skipped) console.log(`  · ${f} (exists — left alone)`);
+
+  console.log(`\n  ${written.length} file(s) written, ${skipped.length} left alone.`);
+  if (written.length > 0) {
+    console.log("\nNext:");
+    console.log("  1. cp data/features/_template.md data/features/F-001--my-feature.md");
+    console.log("  2. gitdata rollup          # writes the board");
+    console.log("  3. gitdata rollup --check  # in CI: has anything drifted?");
+  }
+  return 0;
 }
 
 async function cmdRollup({ root, check }) {
@@ -53,6 +85,8 @@ async function cmdRollup({ root, check }) {
 const args = parseArgs(process.argv.slice(2));
 try {
   if (args.command === "rollup") process.exit(await cmdRollup(args));
+  if (args.command === "init") process.exit(cmdInit(args));
+  if (args.command === "packs") process.exit(cmdPacks());
   console.log(USAGE);
   process.exit(args.command ? 1 : 0);
 } catch (err) {

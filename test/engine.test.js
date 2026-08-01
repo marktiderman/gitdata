@@ -104,6 +104,18 @@ describe("project + query", () => {
     db.close();
   });
 
+  test("md_section reads a section that runs to the end of the file", async () => {
+    // Regression: the first implementation anchored the section end with `\Z`, which does not
+    // exist in JavaScript regex (it is Python's) and silently means a literal "Z". Sections
+    // followed by another `##` worked; a section that ended the file returned "". Every Genesis
+    // feature file happened to have a following section, so only a fresh repo exposed it.
+    const db = await project(load(join(root, "data")));
+    const body = "# Title\n\n## The job\nRuns to the very end.\n";
+    const got = query(db, `SELECT md_section('${body.replace(/'/g, "''")}', 'The job') AS v`)[0].v;
+    assert.equal(got, "Runs to the very end.");
+    db.close();
+  });
+
   test("natural_key sorts dotted ids numerically — 1.10 after 1.9, not after 1.1", async () => {
     const db = await project(load(join(root, "data")));
     const ordered = query(

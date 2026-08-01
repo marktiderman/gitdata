@@ -47,9 +47,36 @@ for fifty years, and inventing a query language in YAML is how small tools becom
 ## Usage
 
 ```bash
-gitdata rollup            # regenerate every view
-gitdata rollup --check    # compile in memory, report drift, write nothing
+gitdata init --pack feature-management   # scaffold tables, templates and a board
+gitdata rollup                           # regenerate every view
+gitdata rollup --check                   # compile in memory, report drift, write nothing
+gitdata packs                            # what's available to install
 ```
+
+Start from nothing in one command:
+
+```bash
+npx github:marktiderman/gitdata init --pack feature-management
+cp data/features/_template.md data/features/F-001--dark-mode.md   # edit it
+npx github:marktiderman/gitdata rollup
+```
+
+`data/_views/features-board.md` now exists, generated from your files:
+
+```markdown
+# Features
+
+**3 features** · 2 in flight · 1 shipped · 1 P0 outstanding
+
+## Building
+
+| priority | id | title | owner | the job |
+| --- | --- | --- | --- | --- |
+| P0 | F-001 | Dark mode | alex | Let people use the app at night without burning their eyes. |
+```
+
+Everything `init` writes is **yours** — edit the template, rewrite the view, add fields. Re-running
+`init` never overwrites a file that already exists.
 
 `--check` is the driftproof guarantee. Put it in CI: a hand-edited board, or a source edit that was
 never rolled up, fails the build. It exits non-zero so **you** decide whether that blocks a merge.

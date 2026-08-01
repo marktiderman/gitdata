@@ -1,0 +1,26 @@
+# feature-management — track what your product does, as data in git.
+#
+# Derived from the features table Genesis has run for months, with Genesis's own vocabulary
+# removed: no map coordinates, no GEN-### numbering, no ratification stamps. What remains is
+# the part that is true for any product.
+#
+# Everything this installs is YOURS. Edit the template, rewrite the view, add fields. The engine
+# discovers columns from your rows — it never requires a field you did not want.
+name: feature-management
+title: Feature management
+description: >
+  A features table and a self-updating board. Every feature is one markdown file with
+  frontmatter; the board is generated from those files and can never disagree with them.
+
+tables:
+  - features
+
+installs:
+  - data/features/_template.md      # the exemplar to copy for a new feature
+  - data/features/README.md         # what a row means
+  - data/_views/features-board.view.yml
+
+# After install:
+#   cp data/features/_template.md data/features/F-001--my-feature.md   (then edit it)
+#   npx gitdata rollup                                                  (writes the board)
+#   npx gitdata rollup --check                                          (CI: has it drifted?)

@@ -45,11 +45,20 @@ function collapseWs(value) {
  */
 function mdSection(body, heading) {
   if (body == null || heading == null) return null;
+  const text = String(body);
   const escaped = String(heading).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`^##\\s+${escaped}[^\\n]*\\n([\\s\\S]*?)(?=^##\\s|\\Z)`, "m").exec(String(body));
-  if (!match) return "";
 
-  return match[1]
+  const start = new RegExp(`^##\\s+${escaped}[^\\n]*\\n`, "m").exec(text);
+  if (!start) return "";
+
+  // Cut at the next `##` heading, or run to the end of the body. Done in two steps rather than
+  // one regex on purpose: JavaScript has no end-of-input anchor usable under the `m` flag (`\Z`
+  // is Python's, and in JS silently means a literal "Z"), so a single-regex version fails to
+  // match whenever the requested section is the LAST one in the file.
+  const rest = text.slice(start.index + start[0].length);
+  const next = /^##\s/m.exec(rest);
+
+  return (next ? rest.slice(0, next.index) : rest)
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line !== "" && !line.startsWith("#"))
