@@ -3,7 +3,7 @@
  * be testable without Genesis checked out next to it.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -181,6 +181,28 @@ describe("rollup", () => {
     assert.equal(checked[0].status, "drifted");
     // check must not repair the file — that is `rollup`'s job, not the check's
     assert.match(readFileSync(join(root, "data/_views/tiers.md"), "utf8"), /hand-edited/);
+  });
+
+  test("refuses to write outside the repo root", async () => {
+    // A typo in `out:` would otherwise silently drop a file outside the project, and an installed
+    // third-party pack could target something like ~/.bashrc. A rollup only writes artifacts
+    // belonging to the repo it was pointed at.
+    for (const out of ["../../ESCAPED.md", "/tmp/gitdata-should-not-exist.md"]) {
+      const dir = mkdtempSync(join(tmpdir(), "gitdata-escape-"));
+      mkdirSync(join(dir, "data/t"), { recursive: true });
+      mkdirSync(join(dir, "data/_views"), { recursive: true });
+      writeFileSync(join(dir, "data/t/a.md"), "---\nid: A\n---\nbody\n");
+      writeFileSync(
+        join(dir, "data/_views/x.view.yml"),
+        `kind: view-spec\nid: x\nout: ${out}\nqueries:\n  r: |\n    SELECT id AS line FROM t\ntemplate: |\n  {{r}}\n`,
+      );
+      await assert.rejects(
+        () => rollup({ dataRoot: join(dir, "data"), repoRoot: dir }),
+        /escapes the repo root/,
+      );
+      rmSync(dir, { recursive: true, force: true });
+    }
+    assert.equal(existsSync("/tmp/gitdata-should-not-exist.md"), false);
   });
 
   test("--check detects a source edit that was never rolled up", async () => {

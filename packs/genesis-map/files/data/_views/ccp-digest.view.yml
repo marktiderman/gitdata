@@ -1,0 +1,74 @@
+# The CCP digest as a gitdata view — the queries + template that reproduce data/_views/ccp-digest.md.
+#
+# This is CONFIG, not code: the engine knows how to filter, sort, and render; it knows nothing
+# about canon, principles, or what "ratified" means. All of that lives here.
+#
+# Byte-identical to the artifact hooks/lib/canon-digest.py --write-view produces, which is the
+# point — canon-digest-test.py already asserts that file has not drifted, so it is a ready-made
+# judge of whether this engine reproduces the reference implementation exactly.
+kind: view-spec
+id: ccp-digest
+out: data/_views/ccp-digest.md
+
+queries:
+  # ONE query emits every line inside the fence. It has to be one query rather than a template
+  # with holes, because the whole fleet-principles block — header, rows and footer — must vanish
+  # together when no principle is adopted/ratified. canon-digest.py emits it only inside `if live`,
+  # and a table with zero live rows is explicitly valid there (not every tenant has adopted
+  # principles yet). A template with a hard-coded header would emit a heading over nothing and
+  # drift from the reference implementation. (Codex P2, PR #356.)
+  digest: |
+    WITH
+    ess(id) AS (
+      VALUES ('cm-0001'),('cm-0002'),('cm-0003'),('cm-0008'),('cm-0009'),
+             ('cm-0010'),('cm-0019'),('cm-0021'),('cm-0022'),('cm-0026')
+    ),
+    rat AS (SELECT * FROM canon WHERE state = 'ratified'),
+    live AS (SELECT * FROM principles WHERE status IN ('adopted', 'ratified'))
+    SELECT line FROM (
+      SELECT 0 AS blk, id AS srt, '  ' || id || ': ' || collapse_ws(statement) AS line
+        FROM rat WHERE id IN (SELECT id FROM ess)
+
+      UNION ALL
+      SELECT 1, '', '  (+' || (SELECT COUNT(*) FROM rat WHERE id NOT IN (SELECT id FROM ess))
+                  || ' more ratified rows — the full worldview: data/canon/*.md. Pull ONLY state=ratified.)'
+
+      UNION ALL
+      SELECT 2, '', '  THE FLEET PRINCIPLES — the Genesis way (owner approval required to change):'
+        WHERE EXISTS (SELECT 1 FROM live)
+
+      UNION ALL
+      -- a statement past ~200 chars reads as a paragraph, not a digest line — fall back to title
+      SELECT 3, id, '  · ' || id || ': ' ||
+             CASE WHEN length(collapse_ws(statement)) BETWEEN 1 AND 200
+                  THEN collapse_ws(statement) ELSE title END
+        FROM live
+
+      UNION ALL
+      SELECT 4, '', '  (' || (SELECT COUNT(*) FROM live)
+                  || ' adopted/ratified principles — the full set: data/principles/*.md. Pull ONLY status=adopted|ratified.)'
+        WHERE EXISTS (SELECT 1 FROM live)
+
+      UNION ALL
+      SELECT 5, '', '  RATIFIED_COUNT='   || (SELECT COUNT(*) FROM rat)
+      UNION ALL
+      SELECT 6, '', '  PRINCIPLES_COUNT=' || (SELECT COUNT(*) FROM live)
+    )
+    ORDER BY blk, srt
+
+template: |
+  <!-- DERIVED VIEW — DO NOT HAND-EDIT (task 11096 / GEN-134 CCP-rail, task 11106
+       canon-to-gitdata; docs-as-data law #4, data/GITDATA.md: every board/map/index
+       is a derived view — generated, never authored). Compiled by
+       hooks/lib/canon-digest.py --write-view from data/canon/*.md (state=ratified) +
+       data/principles/*.md (status=adopted|ratified). Byte-identical given the same
+       sources — no timestamps, no randomness — so CI/roller can diff a fresh compile
+       against this file to catch drift.
+       Regenerate: python3 hooks/lib/canon-digest.py data/canon --write-view -->
+  # THE COMPILED CRITICAL CONTEXT PATH (CCP)
+
+  The exact text injected at every SessionStart boot (genesis-boot.sh → hooks/lib/canon-digest.py) — canon essence rows + the fleet principles, folded into one worldview digest.
+
+  ```
+  {{digest}}
+  ```

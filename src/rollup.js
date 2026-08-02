@@ -6,7 +6,7 @@
  * artifact, or a source edit without a regenerate, fails the check.
  */
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, isAbsolute } from "node:path";
 
 import { parse as parseYaml } from "yaml";
 
@@ -15,6 +15,23 @@ import { project, query } from "./project.js";
 import { renderTemplate } from "./render.js";
 
 export class ViewSpecError extends Error {}
+
+/**
+ * Resolve a view's `out:` and refuse to leave the repo.
+ *
+ * `out: ../../x.md` otherwise writes wherever the process can reach — a typo silently drops a
+ * file outside the project, and an installed third-party pack could target `~/.bashrc`. A rollup
+ * only ever writes artifacts belonging to the repo it was pointed at.
+ */
+function resolveOut(repoRoot, out, specFile) {
+  const base = resolve(repoRoot);
+  const target = resolve(base, out);
+  const rel = relative(base, target);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+    throw new ViewSpecError(`${specFile}: "out" escapes the repo root — ${out}`);
+  }
+  return target;
+}
 
 /** Read `<root>/_views/*.view.yml`, sorted by id for deterministic reporting. */
 export function loadViewSpecs(dataRoot) {
@@ -54,7 +71,7 @@ export async function rollup({ dataRoot, repoRoot, check = false }) {
   try {
     return specs.map((spec) => {
       const compiled = compileView(db, spec);
-      const outPath = resolve(repoRoot, spec.out);
+      const outPath = resolveOut(repoRoot, spec.out, spec._file);
       const committed = existsSync(outPath) ? readFileSync(outPath, "utf8") : null;
 
       if (check) {
