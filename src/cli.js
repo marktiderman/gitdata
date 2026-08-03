@@ -13,9 +13,9 @@ import { rollup } from "./rollup.js";
 
 const USAGE = `gitdata — docs as data in git
 
-  gitdata init --pack <name> [--root <dir>]  scaffold a pack's tables, templates and views
-  gitdata rollup [--check] [--root <dir>]    regenerate views | report drift without writing
-  gitdata packs                              list available packs
+  gitdata init [--pack <name>] [--root <dir>]  scaffold data/ — bare, or from a pack
+  gitdata rollup [--check] [--root <dir>]      regenerate views | report drift without writing
+  gitdata packs                                list available packs
 
 Options:
   --root <dir>   repo root (default: cwd). Data lives in <root>/data.
@@ -44,7 +44,6 @@ function cmdPacks() {
 }
 
 function cmdInit({ root, pack }) {
-  if (!pack) throw new Error("init requires --pack <name>  (see `gitdata packs`)");
   const { written, skipped } = init({ root, pack });
 
   for (const f of written) console.log(`  ✎ ${f}`);
@@ -53,8 +52,13 @@ function cmdInit({ root, pack }) {
   console.log(`\n  ${written.length} file(s) written, ${skipped.length} left alone.`);
   if (written.length > 0) {
     console.log("\nNext:");
-    console.log("  1. cp data/features/_template.md data/features/F-001--my-feature.md");
-    console.log("  2. gitdata rollup          # writes the board");
+    if (pack) {
+      console.log("  1. cp data/features/_template.md data/features/F-001--my-feature.md");
+    } else {
+      console.log("  1. mkdir data/<table>, add a row (.md with frontmatter)");
+      console.log("     then declare a view in data/_views/<id>.view.yml");
+    }
+    console.log("  2. gitdata rollup          # writes the view");
     console.log("  3. gitdata rollup --check  # in CI: has anything drifted?");
   }
   return 0;

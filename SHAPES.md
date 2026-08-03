@@ -8,14 +8,34 @@ fixed once here. A consumer says what its things are called.
 
 If a view spec in a consumer repo contains SQL, that is extension, and it means a shape is missing.
 
-## The four shapes
+## The three shapes
 
 | shape | answers | proved against |
 | --- | --- | --- |
-| `table` | "list these rows, filtered and sorted, as a markdown table" | Genesis `cleanse-board` |
-| `stats` | "count these things and put the numbers in a sentence" | `cleanse-board` header |
-| `digest` | "render these rows as formatted lines, block by block" | Genesis `ccp-digest` |
-| `tree` | "walk a parent→child hierarchy, grouped, with orphans" | Genesis `cleanse-territories` |
+| `sections` | "list these rows, filtered and sorted, under headings, as markdown tables" | Genesis `cleanse-board` |
+| `digest` | "render these rows as formatted lines, block by block" — and, via `counts:`, "count these things and put the numbers in a sentence" | Genesis `ccp-digest` |
+| `tree` | "walk a parent→child hierarchy, indented, with orphans" | Genesis `cleanse-territories` |
+
+## How a view declares one
+
+A `queries:` entry is either a SQL string or a shape declaration. Both produce rows whose first
+column is a line, so `{{name}}` substitutes them identically and one view may mix the two.
+
+```yaml
+queries:
+  body:
+    shape: tree
+    from: features
+    line: ["- ", { from: title }]
+    order: { by: coord, mode: natural }
+    orphans:
+      heading: "## Could not be placed"
+```
+
+`tree` classifies an unplaceable row by **reachability from a root**, not by whether its `parent`
+resolves. That is deliberate: a cycle (`a → b → a`) has resolvable parents and no path to any root,
+so a resolve-only check would drop both rows silently. Every row is emitted exactly once — in the
+tree, or under `orphans:`.
 
 ## What every shape handles for you
 
@@ -35,5 +55,9 @@ of a hand-written SQL view; each is now fixed once, here, for every consumer.
 
 ## Escape hatch
 
-A view may declare `query:` with raw SQL instead of a shape. That exists for genuinely one-off
+A `queries:` entry may be a raw SQL string instead of a shape. That exists for genuinely one-off
 artifacts, and every use is a signal that a shape is missing or too narrow. Prefer filing the gap.
+
+The packs bundled with gitdata still hand-write their SQL: they were authored while `shape:` was
+unreachable from a view spec, so they are all escape hatch and none of them exercise a shape.
+Porting them is the standing test of whether these three shapes are the right three.

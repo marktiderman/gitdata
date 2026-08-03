@@ -44,7 +44,7 @@ export function where(clause) {
  *
  *   "id"                                          → "id"
  *   { from: coord, wrap: "`{}`" }                 → '`' || "coord" || '`'
- *   { from: cleanse, map: {ratified: ok, "*": no} }→ CASE WHEN ... END
+ *   { from: state, map: {done: shipped, "*": open} } → CASE WHEN ... END
  *   { from: body, section: "The job", truncate: 160 } → md_section("_body", 'The job') truncated
  *   { from: statement, collapse: true }           → collapse_ws("statement")
  *

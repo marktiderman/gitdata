@@ -124,16 +124,10 @@ data means.
 
 ## Status
 
-Early, but proven. The rollup engine works and reproduces **three real views byte-for-byte**
-against a live 1,300-row corpus — including one that replaces a 998-line generator:
+`init` and `rollup` are built. `validate` is not: nothing checks a row against a schema, so a table
+accepts any frontmatter and an unedited template rolls up as real data.
 
-| view | bytes | what it exercises |
-| --- | --- | --- |
-| `ccp-digest` | 3,167 | filter + sort + a prose-heavy template |
-| `cleanse-board` | 7,427 | aggregate counts + multiple tables + collapsing empty sections |
-| `cleanse-territories` | 25,725 | recursive tree + union of two tables + value mapping + a column derived from body text + orphan detection |
-
-`init` and `validate` are not built yet.
+Layers, rules, and the gap: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
 

@@ -36,11 +36,64 @@ function walk(dir, base = dir) {
   });
 }
 
+/** What a bare `data/` needs to exist, be committable, and explain itself. */
+const BARE_README = `# data/
+
+The gitdata trellis for this repo.
+
+**folder = table · file = row · frontmatter = columns.**
+
+Every \`.md\` file directly inside a table folder is a row; its frontmatter keys become that
+table's columns. Files and folders prefixed with \`_\` are never rows (\`_template.md\`,
+\`_views/\`, \`_schema/\`), and \`README.md\` documents rather than participates.
+
+Add a table by making a folder and putting a row in it — no declaration step:
+
+    mkdir -p data/things
+    printf -- '---\\nid: T-001\\ntitle: First thing\\n---\\n' > data/things/T-001--first.md
+
+Add a view by writing \`data/_views/<id>.view.yml\`, then:
+
+    gitdata rollup          # regenerate every view
+    gitdata rollup --check  # CI: fail if an artifact drifted from its sources
+
+A generated artifact is never hand-edited — \`rollup --check\` exists to catch exactly that.
+`;
+
 /**
- * @param {{root: string, pack: string}} opts
- * @returns {{pack: string, written: string[], skipped: string[]}}
+ * Scaffold the minimum trellis: a `data/` root and a place for views.
+ *
+ * The engine needs no tables to work — column discovery is the union of whatever frontmatter it
+ * finds — so a consumer bringing its own vocabulary should not have to install someone else's
+ * table list to get started. Without this, `init` demanded `--pack` and the only paths into
+ * gitdata were another repo's content model or hand-made folders.
+ */
+function initBare(root) {
+  const written = [];
+  const skipped = [];
+  for (const [rel, body] of [
+    ["data/README.md", BARE_README],
+    ["data/_views/.gitkeep", ""],
+  ]) {
+    const dest = join(resolve(root), rel);
+    if (existsSync(dest)) {
+      skipped.push(rel);
+      continue;
+    }
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, body);
+    written.push(rel);
+  }
+  return { pack: null, written, skipped };
+}
+
+/**
+ * @param {{root: string, pack?: string|null}} opts
+ * @returns {{pack: string|null, written: string[], skipped: string[]}}
  */
 export function init({ root, pack }) {
+  if (!pack) return initBare(root);
+
   const packDir = join(PACKS_DIR, pack);
   if (!existsSync(join(packDir, "pack.yml"))) {
     const available = listPacks().map((p) => p.name);

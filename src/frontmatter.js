@@ -2,8 +2,8 @@
  * Parse a markdown file into { data, body }.
  *
  * `data` is the YAML frontmatter as a plain object; `body` is everything after the closing
- * fence. Body is returned because views legitimately query it — Genesis's territory view
- * derives its `job` column from the first paragraph of the body, not from frontmatter.
+ * fence. Body is returned because views legitimately query it — a view may derive a summary
+ * column from a section of the body rather than from frontmatter (see `md_section`).
  *
  * CRLF is accepted alongside LF: a non-LF-normalized checkout writes fences as `---\r\n`,
  * and an LF-only matcher would treat every such file as frontmatter-less.
