@@ -58,6 +58,6 @@ of a hand-written SQL view; each is now fixed once, here, for every consumer.
 A `queries:` entry may be a raw SQL string instead of a shape. That exists for genuinely one-off
 artifacts, and every use is a signal that a shape is missing or too narrow. Prefer filing the gap.
 
-The packs bundled with gitdata still hand-write their SQL: they were authored while `shape:` was
-unreachable from a view spec, so they are all escape hatch and none of them exercise a shape.
-Porting them is the standing test of whether these three shapes are the right three.
+No bundled pack uses it. A shipped pack is a worked example, so it declares shapes — enforced by
+`test/boundaries.test.js`. When a pack cannot say what it means without SQL, that is the signal a
+shape is missing.

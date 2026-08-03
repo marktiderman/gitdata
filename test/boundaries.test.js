@@ -116,6 +116,25 @@ describe("layer boundaries", () => {
     assert.deepEqual(documented.sort(), Object.keys(SHAPES).sort());
   });
 
+  test("bundled pack views declare shapes, not SQL", () => {
+    // A shipped pack is a worked example. If one needs raw SQL to say what it means, a shape is
+    // missing — and SHAPES.md's claim about the packs goes stale the moment this stops holding.
+    for (const name of readdirSync(PACKS)) {
+      const viewsDir = join(PACKS, name, "files", "data", "_views");
+      if (!existsSync(viewsDir)) continue;
+      for (const file of readdirSync(viewsDir).filter((f) => f.endsWith(".view.yml"))) {
+        const spec = parseYaml(readFileSync(join(viewsDir, file), "utf8"));
+        for (const [queryName, q] of Object.entries(spec.queries ?? {})) {
+          assert.notEqual(
+            typeof q,
+            "string",
+            `packs/${name}/${file}: query "${queryName}" is raw SQL — declare a shape`,
+          );
+        }
+      }
+    }
+  });
+
   test("packs depend on the engine, never the reverse", () => {
     for (const file of files(SRC)) {
       const text = readFileSync(file, "utf8");
