@@ -54,6 +54,39 @@ describe("load", () => {
     assert.equal(tables.get("features").rows.length, 3);
     assert.equal(tables.get("empty").rows.length, 0);
   });
+
+  test("a sharded table keeps its nested rows, and does not become a table per shard", () => {
+    // Reading only the top level dropped every sharded row with no error and no count. Sharding
+    // by date is the ordinary way a table outgrows one directory, so the loss was silent and
+    // waiting. `2026/` must not appear as a table of its own either.
+    const shard = mkdtempSync(join(tmpdir(), "gitdata-shard-"));
+    const put = (rel, text) => {
+      mkdirSync(join(shard, rel, ".."), { recursive: true });
+      writeFileSync(join(shard, rel), text, "utf8");
+    };
+    put("data/sessions/S-001--flat.md", "---\nid: S-001\n---\nFlat.\n");
+    put("data/sessions/2026/01/S-002--jan.md", "---\nid: S-002\n---\nJanuary.\n");
+    put("data/sessions/2026/02/S-003--feb.md", "---\nid: S-003\n---\nFebruary.\n");
+    put("data/sessions/2026/01/_draft.md", "---\nid: S-XXX\n---\nDraft.\n");
+    put("data/sessions/2026/_scratch/S-999--no.md", "---\nid: S-999\n---\nUnderscore dir.\n");
+    put("data/sessions/2026/README.md", "Docs, not a row.\n");
+
+    try {
+      const tables = load(join(shard, "data"));
+      assert.deepEqual([...tables.keys()], ["sessions"], "a shard directory became its own table");
+      const rows = tables.get("sessions").rows;
+      // Ordered by path relative to the table, so a compile never depends on directory order.
+      assert.deepEqual(rows.map((r) => r.id), ["S-002", "S-003", "S-001"]);
+      // `_file` locates the row inside the table, so two shards may hold same-named files.
+      assert.deepEqual(rows.map((r) => r._file), [
+        "2026/01/S-002--jan.md",
+        "2026/02/S-003--feb.md",
+        "S-001--flat.md",
+      ]);
+    } finally {
+      rmSync(shard, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("project + query", () => {

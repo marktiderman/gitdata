@@ -50,6 +50,7 @@ branch protection, CODEOWNERS, and required checks.
 data/
   <table>/            folder = table
     <row>.md          file = row · frontmatter = columns
+    2026/01/<row>.md  nested rows belong to <table>; shard freely
     _template.md      `_` prefix = never a row
     README.md         documents the table; never a row
   _views/             view specs and the artifacts they generate
@@ -58,6 +59,12 @@ data/
 
 Column discovery is the union of frontmatter keys across a table's rows, so a table needs no
 declaration to be queryable: make a folder, add a row, query it.
+
+**A table may nest.** Rows at any depth belong to the table folder at the top; a subfolder is a
+shard, not a table of its own, and only the first level under `data/` names a table. `_file`
+carries the row's path relative to its table, so two shards may hold same-named files. Sharding by
+date is how a table outgrows one directory — the loader used to read only the top level and drop
+those rows with no error, which is the failure this project exists to prevent.
 
 ## Not built: `validate`
 
