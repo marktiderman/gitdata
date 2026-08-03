@@ -1,19 +1,30 @@
 {
-  "name": "@gitdata/core",
+  "name": "@marktiderman/gitdata",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
+  "type": "module",
+  "sideEffects": false,
+  "description": "GitDATA — dependable, structured, organized docs as data in git that agents and owners can trust.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/marktiderman/gitdata.git"
   },
-  "type": "module",
-  "description": "GitDATA — dependable, structured, organized docs as data in git that agents and owners can trust.",
   "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public",
+    "provenance": false
+  },
   "bin": {
     "gitdata": "./src/cli.js"
   },
+  "main": "./src/index.js",
+  "module": "./src/index.js",
   "exports": {
-    ".": "./src/index.js"
+    ".": {
+      "import": "./src/index.js",
+      "default": "./src/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "src",
@@ -21,18 +32,17 @@
     "docs",
     "README.md",
     "SHAPES.md",
-    "CONTRIBUTING.md",
-    "CLAUDE.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test \"test/**/*.test.js\"",
+    "prepublishOnly": "npm test"
   },
   "dependencies": {
     "@sqlite.org/sqlite-wasm": "3.53.0-build1",
     "yaml": "^2.6.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

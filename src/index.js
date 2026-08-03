@@ -3,7 +3,7 @@
  *
  * `package.json` has declared `exports: { ".": "./src/index.js" }` since the beginning, but the
  * file did not exist — the CLI worked because `bin` points straight at `cli.js`, so nothing
- * exercised the import path and `import { rollup } from "@gitdata/core"` failed for every
+ * exercised the import path and `import { rollup } from "@marktiderman/gitdata"` failed for every
  * consumer. A package that other projects are meant to depend on has to be importable.
  *
  * What is exported here is the contract. Everything else is an implementation detail and may

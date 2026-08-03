@@ -5,7 +5,19 @@
  * view from the repo that motivated the feature. These tests are the ratchet.
  */
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  readdirSync,
+  readFileSync,
+  existsSync,
+  statSync,
+  mkdtempSync,
+  mkdirSync,
+  symlinkSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
@@ -17,6 +29,8 @@ import { SHAPES } from "../src/shapes/index.js";
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(REPO, "src");
 const PACKS = join(REPO, "packs");
+
+const manifest = () => JSON.parse(readFileSync(join(REPO, "package.json"), "utf8"));
 
 const filesWithExt = (dir, ext) =>
   readdirSync(dir).flatMap((e) => {
@@ -144,6 +158,228 @@ describe("layer boundaries", () => {
             Object.hasOwn(SHAPES, q.shape),
             `${at} declares unregistered shape "${q.shape}" — available: ${Object.keys(SHAPES).join(", ")}`,
           );
+        }
+      }
+    }
+  });
+
+  test("every manifest path points at a file that ships", () => {
+    // `exports: { ".": "./src/index.js" }` sat in the manifest for four commits while the file
+    // did not exist, and nothing caught it: the CLI enters through `bin`, so the import path was
+    // never exercised and `npm pack` happily built a tarball around a dangling pointer.
+    //
+    // Existence is only half of it. A target can exist and still not ship, if `files` omits it.
+    const m = manifest();
+    const shipped = new Set(m.files ?? []);
+
+    // Every optional field is optional: removing `module` or `bin` is a legitimate manifest edit
+    // and must report as a normal assertion, not a TypeError from Object.entries(undefined).
+    const targets = [];
+    const add = (field, target) => {
+      if (typeof target === "string") return void targets.push([field, target]);
+      if (target && typeof target === "object") {
+        // Conditions nest arbitrarily deep; walk rather than assuming one level.
+        for (const [k, v] of Object.entries(target)) add(`${field}.${k}`, v);
+      }
+    };
+    for (const field of ["main", "module", "types"]) if (m[field]) add(field, m[field]);
+    for (const [n, p] of Object.entries(m.bin ?? {})) add(`bin.${n}`, p);
+    for (const [sub, t] of Object.entries(m.exports ?? {})) add(`exports["${sub}"]`, t);
+
+    for (const [field, target] of targets) {
+      const rel = target.replace(/^\.\//, "");
+      assert.ok(existsSync(join(REPO, rel)), `package.json ${field} -> ${target} does not exist`);
+      assert.ok(
+        shipped.has(rel.split("/")[0]) || shipped.has(rel) || rel === "package.json",
+        `package.json ${field} -> ${target} is not covered by "files" and would not ship`,
+      );
+    }
+  });
+
+  test("every export subpath is reachable from both ESM and CJS", () => {
+    // Statting a target is not resolving a subpath. `{"banana": "./src/index.js"}` points at a
+    // real, shipped file and resolves for no runtime on earth — existence checks pass it, the
+    // tarball builds, the install succeeds, and the first `import` fails at the consumer.
+    //
+    // Node matches ["node", "import", "default"] for import and ["node", "require", "default"]
+    // for require. A subpath reachable by one and not the other is a narrowing: dropping
+    // `default` for a lone `import` is exactly how this package stopped answering require().
+    const ESM = new Set(["node", "import", "default"]);
+    const CJS = new Set(["node", "require", "default"]);
+
+    const reachable = (target, conditions) => {
+      if (typeof target === "string") return true; // a bare string IS the default condition
+      if (!target || typeof target !== "object") return false;
+      return Object.entries(target).some(
+        ([cond, next]) => conditions.has(cond) && reachable(next, conditions),
+      );
+    };
+
+    for (const [sub, target] of Object.entries(manifest().exports ?? {})) {
+      const declared = typeof target === "object" && target ? Object.keys(target).join(", ") : target;
+      assert.ok(
+        reachable(target, ESM),
+        `exports["${sub}"] is unreachable from ESM (conditions: ${declared}) — needs "import", "node" or "default"`,
+      );
+      assert.ok(
+        reachable(target, CJS),
+        `exports["${sub}"] is unreachable from CJS (conditions: ${declared}) — needs "require", "node" or "default"`,
+      );
+    }
+  });
+
+  test("a consumer can import and require the package by name", () => {
+    // The end of the argument: link the package into a throwaway node_modules and make Node
+    // itself answer, through the real resolver, from outside the repo. Anything short of this
+    // is a reading of the manifest, and a reading is what shipped the narrowing.
+    const m = manifest();
+    const dir = mkdtempSync(join(tmpdir(), "gitdata-resolve-"));
+    try {
+      const [scope, bare] = m.name.startsWith("@") ? m.name.split("/") : [null, m.name];
+      const parent = scope ? join(dir, "node_modules", scope) : join(dir, "node_modules");
+      mkdirSync(parent, { recursive: true });
+      symlinkSync(REPO, join(parent, bare), "dir");
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "consumer", type: "module" }));
+
+      const subpaths = Object.keys(m.exports ?? {}).map((k) => (k === "." ? m.name : m.name + k.slice(1)));
+      writeFileSync(
+        join(dir, "probe.mjs"),
+        // Exits 0 whatever it finds, reporting on stdout: execFileSync throws away output on a
+        // non-zero exit, and a guard whose failure message is "Command failed" helps nobody.
+        `import { createRequire } from "node:module";
+         const require = createRequire(import.meta.url);
+         const fail = (m) => console.log("FAIL " + m);
+         for (const s of ${JSON.stringify(subpaths)}) {
+           let url;
+           try { url = await import.meta.resolve(s); } catch (e) { fail(s + " esm-resolve " + (e.code ?? e.message)); }
+           try { require.resolve(s); } catch (e) { fail(s + " cjs-resolve " + (e.code ?? e.message)); }
+           // A JSON subpath is data, not a module: loading it needs an import attribute, which is
+           // the caller's syntax, not something the manifest can be wrong about.
+           const opts = url && url.endsWith(".json") ? { with: { type: "json" } } : undefined;
+           try { await import(s, opts); } catch (e) { fail(s + " import " + (e.code ?? e.message)); }
+           try { require(s); } catch (e) {
+             // require() of ESM is unsupported below Node 22.12 — that is the runtime's limit,
+             // not the manifest turning the caller away. Only an exports refusal is our bug.
+             if (e.code !== "ERR_REQUIRE_ESM") fail(s + " require " + (e.code ?? e.message));
+           }
+           console.log("checked " + s);
+         }
+         console.log("PROBE DONE");`,
+      );
+
+      const out = execFileSync(process.execPath, [join(dir, "probe.mjs")], {
+        encoding: "utf8",
+        cwd: dir,
+        timeout: 60_000,
+      });
+      assert.match(out, /PROBE DONE/, `probe did not run to completion:\n${out}`);
+      assert.equal(
+        out.split("\n").filter((l) => l.startsWith("FAIL")).join("\n"),
+        "",
+        `a consumer could not load every subpath:\n${out}`,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("nothing we ship names the unscoped package", () => {
+    // Unscoped, `gitdata` on npm is an unrelated 2016 package by another author. A file telling
+    // a consumer to fetch that name is us instructing somebody else's machine to download and
+    // execute a stranger's code.
+    //
+    // Enumerating runners is whack-a-mole, and the first version of this guard lost: it knew
+    // npx/bunx/pnpm-dlx and missed `npm exec`, `deno run npm:`, and — the one with real teeth —
+    // a dependency block. `init` copies a pack's whole `files/` tree (the `installs:` key is
+    // documentation it never reads), so a `files/package.json` lands in the consumer's repo root
+    // and their next install fetches it.
+    //
+    // So the rule is inverted: extract whatever token sits in package position, whatever the
+    // syntax, and fail only when it names the package we must never send anyone to. Unrelated
+    // tools and prose are ignored by construction, which is what keeps `npx -y`, a pinned
+    // `pkg@1.2.3`, and a bare `npm install` from being false positives.
+    const m = manifest();
+    const FORBIDDEN = (n) => n === "gitdata" || n.startsWith("@gitdata/");
+
+    // A specifier that is not an npm registry name cannot resolve to the squatted package.
+    // `npx github:marktiderman/gitdata` is a git spec and is correct — it must not trip this.
+    const NON_REGISTRY = /^(?:github|gitlab|bitbucket|git|git\+[a-z]+|https?|file|link|workspace|portal):/i;
+
+    /** A command-line token, or a manifest key, reduced to the npm package name it names. */
+    const packageName = (raw) => {
+      let s = raw.replace(/^[('"`]+|[)'"`,;]+$/g, "").trim();
+      if (!s || s.startsWith("-")) return null;
+      if (s.startsWith("npm:")) s = s.slice(4); // deno, and npm: aliases in dependency values
+      if (NON_REGISTRY.test(s)) return null;
+      const at = s.indexOf("@", s.startsWith("@") ? 1 : 0); // strip a pinned version
+      return (at > 0 ? s.slice(0, at) : s) || null;
+    };
+
+    const args = (tail) =>
+      tail
+        .split(/\s+/)
+        .filter((t) => t && t !== "--" && !t.startsWith("-"))
+        .map(packageName)
+        .filter(Boolean);
+
+    // Tails stop at the newline: `\s+` crossing one is how a bare `npm install` on its own line
+    // captured the next line's first word.
+    const RUNNER =
+      /\b(?:npm\s+exec|npm\s+x|pnpm\s+dlx|pnpm\s+exec|yarn\s+dlx|yarn\s+exec|deno\s+run|bun\s+x|npx|bunx|yarn)\b([^\n`]*)/g;
+    const INSTALL =
+      /\b(?:npm\s+install|npm\s+add|npm\s+i|pnpm\s+install|pnpm\s+add|pnpm\s+i|yarn\s+add|bun\s+install|bun\s+add|deno\s+add)\b([^\n`]*)/g;
+    const SPECIFIER = /(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*)(['"])([^'"]+)\1/g;
+    const DEP_BLOCKS = [
+      "dependencies",
+      "devDependencies",
+      "peerDependencies",
+      "optionalDependencies",
+      "resolutions",
+      "overrides",
+    ];
+
+    const walk = (p) =>
+      statSync(p).isDirectory() ? readdirSync(p).flatMap((e) => walk(join(p, e))) : [p];
+
+    // Guard the whole shipped surface, not just packs/ — README.md is in the tarball and was the
+    // one file the previous guard could not see. Derived from `files` so it tracks the manifest,
+    // plus the contributor docs, which stay guarded even after being dropped from the tarball.
+    const roots = [...new Set([...(m.files ?? []), "README.md", "docs", "CONTRIBUTING.md", "CLAUDE.md"])];
+
+    for (const root of roots) {
+      if (!existsSync(join(REPO, root))) continue;
+      for (const file of walk(join(REPO, root))) {
+        const at = file.slice(REPO.length + 1);
+        const raw = readFileSync(file);
+        if (raw.includes(0)) continue; // binary
+        const text = raw.toString("utf8");
+        const offend = (kind, n) =>
+          assert.fail(`${at} ${kind} the unscoped "${n}" — must be "${m.name}"`);
+
+        for (const [, tail] of text.matchAll(RUNNER)) {
+          const first = args(tail)[0];
+          if (first && FORBIDDEN(first)) offend("runs", first);
+        }
+        for (const [, tail] of text.matchAll(INSTALL)) {
+          for (const n of args(tail)) if (FORBIDDEN(n)) offend("installs", n);
+        }
+        for (const [, , spec] of text.matchAll(SPECIFIER)) {
+          const n = packageName(spec);
+          if (n && FORBIDDEN(n)) offend("imports", n);
+        }
+        if (!file.endsWith(".json")) continue;
+        let json;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          continue; // not our problem to diagnose here
+        }
+        for (const block of DEP_BLOCKS) {
+          for (const [dep, range] of Object.entries(json?.[block] ?? {})) {
+            if (FORBIDDEN(dep)) offend(`declares a ${block} on`, dep);
+            const aliased = typeof range === "string" ? packageName(range) : null;
+            if (aliased && FORBIDDEN(aliased)) offend(`aliases a ${block} to`, aliased);
+          }
         }
       }
     }
