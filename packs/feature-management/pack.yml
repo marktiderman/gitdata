@@ -22,5 +22,5 @@ installs:
 
 # After install:
 #   cp data/features/_template.md data/features/F-001--my-feature.md   (then edit it)
-#   npx gitdata rollup                                                  (writes the board)
-#   npx gitdata rollup --check                                          (CI: has it drifted?)
+#   npx @gitdata/core rollup                                            (writes the board)
+#   npx @gitdata/core rollup --check                                    (CI: has it drifted?)

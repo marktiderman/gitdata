@@ -1,0 +1,55 @@
+# ci.yml — the ONE CI gate.
+#
+# BILLING CONTRACT (inherited from Genesis's July 2026 $640 Actions overage — do not regress):
+#   1. NEVER add `synchronize` to the pull_request types below. Agent branches push every
+#      30-60s during active work; per-push triggers were the root cause of the runaway.
+#   2. ONE job only. GitHub bills each job's minutes rounded UP to a full minute, so a
+#      second job costs a full extra minute even when it takes two seconds. New checks go
+#      in this job as steps, not as new jobs.
+#   3. Keep `timeout-minutes`. Untimed hangs run to GitHub's 6-hour cap.
+#   4. Keep `cancel-in-progress` so a superseded run never bills to completion.
+#
+# The suite runs in ~1s (16 tests, node:test, no browser, no build step), so this job is
+# dominated by checkout + `npm ci`. There is deliberately no linter: the engine is ~400 lines
+# and the tests are the gate. Add one when it earns its minute.
+name: CI
+
+on:
+  pull_request:
+    # `opened` covers PRs created ready-for-review (agents open non-draft PRs, so
+    # `ready_for_review` alone would never fire for them). No `synchronize` — see above.
+    types: [opened, ready_for_review, reopened]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: test (one job by design)
+    # Drafts wait for ready_for_review; push/dispatch always run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false # a read-only job leaves no credential on disk
+
+      # No `cache: npm`. Two dependencies restore faster than a cache round-trip, and a
+      # cache save is its own failure surface (Genesis burned a gate on a phantom one).
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22 # matches engines.node; @sqlite.org/sqlite-wasm requires >=22
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test

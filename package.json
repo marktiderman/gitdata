@@ -1,10 +1,13 @@
 {
   "name": "@gitdata/core",
   "version": "0.0.0",
-  "private": true,
   "type": "module",
   "description": "GitDATA — dependable, structured, organized docs as data in git that agents and owners can trust.",
   "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "bin": {
     "gitdata": "./src/cli.js"
   },
@@ -26,6 +29,6 @@
     "yaml": "^2.6.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }
