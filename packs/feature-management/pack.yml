@@ -1,12 +1,14 @@
 # feature-management — track what your product does, as data in git.
 #
-# Derived from the features table Genesis has run for months, with Genesis's own vocabulary
-# removed: no map coordinates, no GEN-### numbering, no ratification stamps. What remains is
-# the part that is true for any product.
+# The starter pack: the smallest table worth having, plus a board generated from it. Deliberately
+# plain — no numbering scheme, no workflow stamps, no coordinates — so it reads as an example
+# rather than as somebody else's process.
 #
 # Everything this installs is YOURS. Edit the template, rewrite the view, add fields. The engine
 # discovers columns from your rows — it never requires a field you did not want.
 name: feature-management
+version: 0.1.0
+requires: ">=0.1.0" # engine versions this pack is known to work with
 title: Feature management
 description: >
   A features table and a self-updating board. Every feature is one markdown file with

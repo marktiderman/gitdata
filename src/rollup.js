@@ -13,6 +13,7 @@ import { parse as parseYaml } from "yaml";
 import { load } from "./load.js";
 import { project, query } from "./project.js";
 import { renderTemplate } from "./render.js";
+import { runShape } from "./shapes/index.js";
 
 export class ViewSpecError extends Error {}
 
@@ -50,11 +51,17 @@ export function loadViewSpecs(dataRoot) {
     });
 }
 
-/** Compile one view to its final text without touching disk. */
+/**
+ * Compile one view to its final text without touching disk.
+ *
+ * A `queries:` entry is either raw SQL (a string) or a shape declaration (a mapping with
+ * `shape:`). Both yield rows whose first column is a line, so the renderer cannot tell them
+ * apart and a view may mix the two.
+ */
 export function compileView(db, spec) {
   const results = {};
-  for (const [name, sql] of Object.entries(spec.queries)) {
-    results[name] = query(db, sql);
+  for (const [name, q] of Object.entries(spec.queries)) {
+    results[name] = typeof q === "string" ? query(db, q) : runShape(db, q);
   }
   return renderTemplate(spec.template, results);
 }

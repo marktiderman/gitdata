@@ -8,6 +8,7 @@ status: idea # idea | planned | building | shipped | dropped
 priority: P2 # P0 (now) | P1 | P2 | P3 (someday)
 parent: null # another feature's id, for sub-features. null for a top-level one.
 owner: null # who is accountable, if anyone yet
+owns: [] # glob(s) for the code this feature owns, e.g. ["src/pages/Sessions*", "src/components/sessions/**"]
 tags: []
 created: 2026-01-01
 updated: 2026-01-01

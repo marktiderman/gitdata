@@ -1,7 +1,11 @@
 {
   "name": "@gitdata/core",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marktiderman/gitdata.git"
+  },
   "type": "module",
   "description": "GitDATA — dependable, structured, organized docs as data in git that agents and owners can trust.",
   "license": "Apache-2.0",
@@ -14,7 +18,10 @@
   "files": [
     "src",
     "packs",
+    "docs",
     "README.md",
+    "SHAPES.md",
+    "CONTRIBUTING.md",
     "CLAUDE.md",
     "LICENSE"
   ],
