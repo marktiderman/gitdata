@@ -21,7 +21,8 @@
   "module": "./src/index.js",
   "exports": {
     ".": {
-      "import": "./src/index.js"
+      "import": "./src/index.js",
+      "default": "./src/index.js"
     },
     "./package.json": "./package.json"
   },
@@ -31,12 +32,11 @@
     "docs",
     "README.md",
     "SHAPES.md",
-    "CONTRIBUTING.md",
-    "CLAUDE.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test \"test/**/*.test.js\"",
+    "prepublishOnly": "npm test"
   },
   "dependencies": {
     "@sqlite.org/sqlite-wasm": "3.53.0-build1",
