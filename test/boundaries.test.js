@@ -149,6 +149,62 @@ describe("layer boundaries", () => {
     }
   });
 
+  test("every manifest path points at a file that ships", () => {
+    // `exports: { ".": "./src/index.js" }` sat in the manifest for four commits while the file
+    // did not exist. Nothing caught it: the CLI enters through `bin`, so the import path was
+    // never exercised, and `npm pack` happily builds a tarball around a dangling pointer. An
+    // export that resolves to nothing is the bug that ships green — so resolve them all.
+    const manifest = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8"));
+    const shipped = new Set(manifest.files);
+
+    const targets = [
+      ["main", manifest.main],
+      ["module", manifest.module],
+      ...Object.entries(manifest.bin).map(([name, p]) => [`bin.${name}`, p]),
+      ...Object.entries(manifest.exports).flatMap(([sub, target]) =>
+        typeof target === "string"
+          ? [[`exports["${sub}"]`, target]]
+          : Object.entries(target).map(([cond, p]) => [`exports["${sub}"].${cond}`, p]),
+      ),
+    ];
+
+    for (const [field, target] of targets) {
+      const rel = target.replace(/^\.\//, "");
+      assert.ok(existsSync(join(REPO, rel)), `package.json ${field} -> ${target} does not exist`);
+      // Existing on disk is not enough — `files` decides what a consumer actually receives.
+      assert.ok(
+        shipped.has(rel.split("/")[0]) || shipped.has(rel) || rel === "package.json",
+        `package.json ${field} -> ${target} is not covered by "files" and would not ship`,
+      );
+    }
+  });
+
+  test("shipped packs invoke the scoped package name", () => {
+    // Unscoped, `gitdata` on npm is an unrelated package by another author. A pack telling a
+    // consumer to run the bare name is us instructing somebody else's machine to download and
+    // execute a stranger's code, which is far worse than a broken instruction.
+    const { name } = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8"));
+    const walk = (dir) =>
+      readdirSync(dir).flatMap((e) => {
+        const p = join(dir, e);
+        return statSync(p).isDirectory() ? walk(p) : [p];
+      });
+
+    const INVOKE = /\b(?:npx|pnpm dlx|bunx)\s+(\S+)/g;
+    const INSTALL = /\b(?:npm i(?:nstall)?|pnpm add|yarn add|bun add)\s+(?:-\S+\s+)*(\S+)/g;
+
+    for (const file of existsSync(PACKS) ? walk(PACKS) : []) {
+      const text = readFileSync(file, "utf8");
+      const at = file.slice(REPO.length + 1);
+      for (const [, ref] of text.matchAll(INVOKE)) {
+        assert.equal(ref, name, `${at} invokes "${ref}" — must be the scoped "${name}"`);
+      }
+      for (const [, ref] of text.matchAll(INSTALL)) {
+        assert.equal(ref, name, `${at} installs "${ref}" — must be the scoped "${name}"`);
+      }
+    }
+  });
+
   test("packs depend on the engine, never the reverse", () => {
     for (const file of files(SRC)) {
       const text = readFileSync(file, "utf8");
