@@ -10,11 +10,11 @@ If a view spec in a consumer repo contains SQL, that is extension, and it means 
 
 ## The three shapes
 
-| shape | answers | proved against |
-| --- | --- | --- |
-| `sections` | "list these rows, filtered and sorted, under headings, as markdown tables" | Genesis `cleanse-board` |
-| `digest` | "render these rows as formatted lines, block by block" — and, via `counts:`, "count these things and put the numbers in a sentence" | Genesis `ccp-digest` |
-| `tree` | "walk a parent→child hierarchy, indented, with orphans" | Genesis `cleanse-territories` |
+| shape | answers |
+| --- | --- |
+| `sections` | "list these rows, filtered and sorted, under headings, as markdown tables" |
+| `digest` | "render these rows as formatted lines, block by block" — and, via `counts:`, "count these things and put the numbers in a sentence" |
+| `tree` | "walk a parent→child hierarchy, indented, with orphans" |
 
 ## How a view declares one
 

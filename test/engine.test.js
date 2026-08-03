@@ -1,6 +1,6 @@
 /**
  * Engine tests, run against a self-contained fixture repo built in a temp dir — the package must
- * be testable without Genesis checked out next to it.
+ * be testable without any consumer repo checked out next to it.
  */
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
@@ -69,7 +69,7 @@ describe("project + query", () => {
     db.close();
   });
 
-  test("WITH RECURSIVE walks a parent chain — the shape the territory view needs", async () => {
+  test("WITH RECURSIVE walks a parent chain — the shape a hierarchy view needs", async () => {
     const db = await project(load(join(root, "data")));
     const rows = query(
       db,
@@ -87,7 +87,7 @@ describe("project + query", () => {
     db.close();
   });
 
-  test("body text is queryable — the territory view derives a column from it", async () => {
+  test("body text is queryable — a view may derive a column from it", async () => {
     const db = await project(load(join(root, "data")));
     assert.equal(query(db, "SELECT _body AS b FROM features WHERE id = 'GEN-001'")[0].b, "Alpha body.\n");
     db.close();
@@ -107,8 +107,8 @@ describe("project + query", () => {
   test("md_section reads a section that runs to the end of the file", async () => {
     // Regression: the first implementation anchored the section end with `\Z`, which does not
     // exist in JavaScript regex (it is Python's) and silently means a literal "Z". Sections
-    // followed by another `##` worked; a section that ended the file returned "". Every Genesis
-    // feature file happened to have a following section, so only a fresh repo exposed it.
+    // followed by another `##` worked; a section that ended the file returned "". Every file in the
+    // corpus that first exercised this had a following section, so only a fresh repo exposed it.
     const db = await project(load(join(root, "data")));
     const body = "# Title\n\n## The job\nRuns to the very end.\n";
     const got = query(db, `SELECT md_section('${body.replace(/'/g, "''")}', 'The job') AS v`)[0].v;

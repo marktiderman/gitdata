@@ -18,11 +18,16 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(REPO, "src");
 const PACKS = join(REPO, "packs");
 
-const files = (dir) =>
+const filesWithExt = (dir, ext) =>
   readdirSync(dir).flatMap((e) => {
     const p = join(dir, e);
-    return statSync(p).isDirectory() ? files(p) : extname(p) === ".js" ? [p] : [];
+    return statSync(p).isDirectory() ? filesWithExt(p, ext) : extname(p) === ext ? [p] : [];
   });
+
+const files = (dir) => filesWithExt(dir, ".js");
+
+/** Public prose that a new reader meets first. Vocabulary leaks here as readily as in code. */
+const PUBLIC_DOCS = ["README.md", "SHAPES.md", "CONTRIBUTING.md", "docs/ARCHITECTURE.md"];
 
 /**
  * Words that name somebody's data rather than a mechanism. A consumer's vocabulary in the engine
@@ -56,6 +61,19 @@ describe("layer boundaries", () => {
       [],
       `consumer vocabulary found in src/ — see docs/ARCHITECTURE.md rule 1:\n  ${offenders.join("\n  ")}`,
     );
+  });
+
+  test("the public docs name no consumer vocabulary", () => {
+    // Caught a real leak: SHAPES.md credited each shape to the private repo whose view motivated
+    // it, which says nothing to an outside reader and names somebody's internals in public prose.
+    const offenders = [];
+    for (const rel of PUBLIC_DOCS) {
+      const text = readFileSync(join(REPO, rel), "utf8").toLowerCase();
+      for (const word of CONSUMER_WORDS) {
+        if (text.includes(word)) offenders.push(`${rel}: "${word}"`);
+      }
+    }
+    assert.deepEqual(offenders, [], `consumer vocabulary in public docs:\n  ${offenders.join("\n  ")}`);
   });
 
   test("no shipped pack is named for a specific organisation", () => {
