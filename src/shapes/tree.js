@@ -27,7 +27,8 @@ const isRoot = (v) => v == null || v === "null" || v === "None" || v === "";
 /**
  * @param {object} db
  * @param {{from: string, id?: string, parent?: string, line: Array, indent?: string,
- *          where?: object, order?: object|string, orphans?: {heading?: string|string[], empty?: string}}} spec
+ *          where?: object, order?: object|string,
+ *          orphans?: {heading?: string|string[], bare?: boolean}}} spec
  * @returns {string[]} rendered lines
  */
 export function tree(db, spec) {
@@ -52,10 +53,22 @@ export function tree(db, spec) {
   );
 
   // Children keyed by parent id, each list already in the query's deterministic order.
+  //
+  // Duplicate ids are refused rather than tolerated. `project.js` creates tables with no PRIMARY
+  // KEY and frontmatter enforces nothing, so two rows can share an id — and the walk would emit
+  // the first, skip the second as already-seen, and then exclude it from the orphan sweep for the
+  // same reason. The row would vanish with no output at all, breaking this shape's one promise:
+  // every row appears exactly once, in the tree or under orphans.
   const children = new Map();
   const known = new Set();
   for (const r of rows) {
-    known.add(String(r._id));
+    const id = String(r._id);
+    if (known.has(id)) {
+      throw new ShapeError(
+        `tree on "${spec.from}": duplicate ${idCol} "${id}" — ids must be unique to place a row`,
+      );
+    }
+    known.add(id);
     if (isRoot(r._parent)) continue;
     const key = String(r._parent);
     if (!children.has(key)) children.set(key, []);

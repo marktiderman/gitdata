@@ -11,7 +11,7 @@ vocabulary.
 | **Shapes** | `src/shapes/` | nesting, sections, digests, ordering, orphans | what a table is *called* |
 | **Packs** | `packs/` | tables, columns, templates, views | how any of it *runs* |
 
-```
+```text
 packs  →  shapes  →  engine
 ```
 
@@ -46,7 +46,7 @@ branch protection, CODEOWNERS, and required checks.
 
 ## Data layout
 
-```
+```text
 data/
   <table>/            folder = table
     <row>.md          file = row · frontmatter = columns

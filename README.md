@@ -83,7 +83,8 @@ never rolled up, fails the build. It exits non-zero so **you** decide whether th
 
 ## A view
 
-A view is config, not code — named SQL queries plus a template:
+A view is config, not code — named queries plus a template. Each query is either a **shape**
+declaration (see [SHAPES.md](SHAPES.md)) or a raw SQL string, shown here:
 
 ```yaml
 kind: view-spec
@@ -104,7 +105,9 @@ template: |
 ```
 
 Two substitutions, deliberately no more: `{{name}}` joins a result set's first column by newline,
-`{{name.column}}` reads a scalar from the first row.
+`{{name.column}}` reads a scalar from the first row. A shape returns `{ line }` rows, so it is
+always read with `{{name}}`; a SQL string returns whatever it selected, so `{{total.n}}` above
+reads that query's `n` column.
 
 **The engine knows** how to filter, sort, group, join, walk trees, count, and render.
 **The engine does not know** what a "feature" is, or what your status values mean. That lives in

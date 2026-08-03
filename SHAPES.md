@@ -18,8 +18,10 @@ If a view spec in a consumer repo contains SQL, that is extension, and it means 
 
 ## How a view declares one
 
-A `queries:` entry is either a SQL string or a shape declaration. Both produce rows whose first
-column is a line, so `{{name}}` substitutes them identically and one view may mix the two.
+A `queries:` entry is either a SQL string or a shape declaration, and the two return different
+shapes. A shape produces `{ line }` rows; a SQL string returns whatever columns it selected. Use
+`{{name}}` for line-oriented results and `{{name.column}}` to read a scalar off the first row. One
+view may mix both.
 
 ```yaml
 queries:

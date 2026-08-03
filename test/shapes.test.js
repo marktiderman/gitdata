@@ -36,6 +36,9 @@ before(() => {
   write("data/nodes/loop2.md", "---\nid: loop2\ntitle: Loop2\nparent: loop1\n---\n");
   write("data/clean/x.md", "---\nid: x\ntitle: X\nparent: null\n---\n");
   write("data/clean/y.md", "---\nid: y\ntitle: Y\nparent: x\n---\n");
+  // Two rows sharing an id, under both the default `id` column and a custom one.
+  write("data/dupes/one.md", "---\nid: a\ncode: x\ntitle: First\nparent: null\n---\n");
+  write("data/dupes/two.md", "---\nid: a\ncode: x\ntitle: Second\nparent: null\n---\n");
 });
 
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -88,6 +91,29 @@ describe("tree shape", () => {
       tree(db, { from: "clean", line: ["- ", { from: "title" }], orphans: { heading: "## Orphans" } }),
     );
     assert.deepEqual(lines, ["- X", "  - Y"]);
+  });
+
+  test("omits the reason comment on orphan lines when `bare` is set", async () => {
+    const lines = await withDb((db) => tree(db, treeSpec({ orphans: { bare: true } })));
+    const ghost = lines.find((l) => l.includes("Ghost"));
+    assert.equal(ghost, "- Ghost");
+  });
+
+  test("refuses duplicate ids rather than silently dropping a row", async () => {
+    // Tables carry no PRIMARY KEY and frontmatter enforces nothing, so two rows can share an id.
+    // Before this check the second was skipped by `seen` during the walk AND excluded from the
+    // orphan sweep for the same reason — it produced no output at all.
+    await withDb((db) => {
+      assert.throws(
+        () => tree(db, { from: "dupes", line: ["- ", { from: "title" }] }),
+        /duplicate id "a"/,
+      );
+      // Same defect via a custom id column.
+      assert.throws(
+        () => tree(db, { from: "dupes", id: "code", line: ["- ", { from: "title" }] }),
+        /duplicate code "x"/,
+      );
+    });
   });
 
   test("honours a custom indent", async () => {

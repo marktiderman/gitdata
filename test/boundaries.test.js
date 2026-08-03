@@ -26,6 +26,19 @@ const filesWithExt = (dir, ext) =>
 
 const files = (dir) => filesWithExt(dir, ".js");
 
+/**
+ * A pack is a directory holding a `pack.yml` — the same rule `listPacks` applies in src/init.js.
+ * Enumerating `packs/` by hand instead treats a stray `README.md` as a pack and throws when the
+ * directory is absent.
+ */
+const packDirs = () =>
+  existsSync(PACKS)
+    ? readdirSync(PACKS, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && existsSync(join(PACKS, e.name, "pack.yml")))
+        .map((e) => e.name)
+        .sort()
+    : [];
+
 /** Public prose that a new reader meets first. Vocabulary leaks here as readily as in code. */
 const PUBLIC_DOCS = ["README.md", "SHAPES.md", "CONTRIBUTING.md", "docs/ARCHITECTURE.md"];
 
@@ -79,7 +92,7 @@ describe("layer boundaries", () => {
   test("no shipped pack is named for a specific organisation", () => {
     // A pack is a vocabulary anyone could adopt. One named for its author's own project is a
     // private artifact that happens to live here, and it teaches new readers the wrong thing.
-    for (const name of readdirSync(PACKS)) {
+    for (const name of packDirs()) {
       for (const word of CONSUMER_WORDS) {
         assert.ok(!name.toLowerCase().includes(word), `pack "${name}" is named for a consumer`);
       }
@@ -87,9 +100,8 @@ describe("layer boundaries", () => {
   });
 
   test("every pack declares a name, version and engine range", () => {
-    for (const name of readdirSync(PACKS)) {
+    for (const name of packDirs()) {
       const manifest = join(PACKS, name, "pack.yml");
-      assert.ok(existsSync(manifest), `packs/${name} has no pack.yml`);
       const pack = parseYaml(readFileSync(manifest, "utf8"));
       assert.equal(pack.name, name, `packs/${name}: name disagrees with its folder`);
       assert.match(String(pack.version ?? ""), /^\d+\.\d+\.\d+$/, `packs/${name}: needs a semver version`);
@@ -119,16 +131,18 @@ describe("layer boundaries", () => {
   test("bundled pack views declare shapes, not SQL", () => {
     // A shipped pack is a worked example. If one needs raw SQL to say what it means, a shape is
     // missing — and SHAPES.md's claim about the packs goes stale the moment this stops holding.
-    for (const name of readdirSync(PACKS)) {
+    for (const name of packDirs()) {
       const viewsDir = join(PACKS, name, "files", "data", "_views");
       if (!existsSync(viewsDir)) continue;
       for (const file of readdirSync(viewsDir).filter((f) => f.endsWith(".view.yml"))) {
         const spec = parseYaml(readFileSync(join(viewsDir, file), "utf8"));
         for (const [queryName, q] of Object.entries(spec.queries ?? {})) {
-          assert.notEqual(
-            typeof q,
-            "string",
-            `packs/${name}/${file}: query "${queryName}" is raw SQL — declare a shape`,
+          const at = `packs/${name}/${file}: query "${queryName}"`;
+          assert.notEqual(typeof q, "string", `${at} is raw SQL — declare a shape`);
+          assert.ok(q && typeof q === "object", `${at} must be a shape declaration`);
+          assert.ok(
+            Object.hasOwn(SHAPES, q.shape),
+            `${at} declares unregistered shape "${q.shape}" — available: ${Object.keys(SHAPES).join(", ")}`,
           );
         }
       }
@@ -140,7 +154,10 @@ describe("layer boundaries", () => {
       const text = readFileSync(file, "utf8");
       const rel = file.slice(REPO.length + 1);
       // init.js legitimately reads packs/ from disk; nothing may *import* from one.
-      assert.ok(!/from\s+["'].*\/packs\//.test(text), `${rel} imports from packs/`);
+      assert.ok(
+        !/(?:from|import|require)\s*\(?\s*["'][^"']*\/packs\//.test(text),
+        `${rel} imports from packs/`,
+      );
     }
   });
 });
