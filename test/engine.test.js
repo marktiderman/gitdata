@@ -3,13 +3,13 @@
  * be testable without any consumer repo checked out next to it.
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, symlinkSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 
 import { parseFrontmatter, FrontmatterError } from "../src/frontmatter.js";
-import { load } from "../src/load.js";
+import { escapedRowFiles, isRowFile, load, rowFilesIn } from "../src/load.js";
 import { project, query } from "../src/project.js";
 import { renderTemplate, RenderError } from "../src/render.js";
 import { rollup } from "../src/rollup.js";
@@ -55,6 +55,102 @@ describe("load", () => {
     assert.equal(tables.get("empty").rows.length, 0);
   });
 
+  test("isRowFile answers the same question the loader asks, for a consumer that writes rows", () => {
+    // Pinned as behaviour because it is now published API: a consumer deletes and rewrites rows by
+    // this predicate, so widening or narrowing it is a change to somebody else's data, not a
+    // refactor. Each clause below is a file somebody has actually lost or duplicated.
+    assert.ok(isRowFile("GEN-001--alpha.md"));
+    assert.ok(!isRowFile("_template.md"), "`_` is the reservation for non-rows");
+    assert.ok(!isRowFile("README.md"), "a table documents itself without becoming a row");
+    assert.ok(!isRowFile("ReadMe.md"), "case-insensitively — the loader's docstring says so");
+    assert.ok(!isRowFile("notes.txt"), "the format does not move: rows are markdown");
+    assert.ok(!isRowFile("row.md.bak"), "an editor backup is not a row");
+    assert.ok(!isRowFile(".hidden.md"), "the walk skips `.` entries, so the predicate must too");
+    assert.ok(!isRowFile(".DS_Store.md"), "no `.`-prefixed file is a row, whatever its extension");
+  });
+
+  test("isRowFile agrees with the loader about a `.`-prefixed file", () => {
+    // Asserting the predicate alone would have passed while the loader skipped the file: the walk
+    // filters `.` entries before the predicate is ever consulted, so the disagreement is invisible
+    // until the predicate is handed out on its own. This compares the two against ONE directory
+    // rather than trusting either in isolation.
+    const dir = mkdtempSync(join(tmpdir(), "gitdata-dot-"));
+    const put = (rel, text) => {
+      mkdirSync(join(dir, rel, ".."), { recursive: true });
+      writeFileSync(join(dir, rel), text, "utf8");
+    };
+    put("data/things/a.md", "---\nid: A\n---\nVisible.\n");
+    put("data/things/.hidden.md", "---\nid: H\n---\nHidden.\n");
+
+    try {
+      assert.deepEqual(rowFilesIn(join(dir, "data/things")), ["a.md"]);
+      assert.deepEqual(
+        load(join(dir, "data"))
+          .get("things")
+          .rows.map((r) => r._file),
+        ["a.md"],
+        "loader and predicate must answer identically",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("escapedRowFiles names the rows that do not live under the table", () => {
+    // A rewriter deletes every path rowFilesIn reports. Through a symlinked shard that reaches
+    // outside the table, and can reach outside the repo. rowFilesIn must keep reporting them --
+    // the loader reads them, so omitting them would make the enumerator disagree with the loader
+    // again -- so the fact is published alongside instead, and the consumer rules on it.
+    const dir = mkdtempSync(join(tmpdir(), "gitdata-escape-"));
+    const put = (rel, text) => {
+      mkdirSync(join(dir, rel, ".."), { recursive: true });
+      writeFileSync(join(dir, rel), text, "utf8");
+    };
+    put("data/things/here.md", "---\nid: A\n---\nInside.\n");
+    put("elsewhere/gone.md", "---\nid: B\n---\nOutside the table.\n");
+    symlinkSync(join(dir, "elsewhere"), join(dir, "data/things/shard"));
+
+    try {
+      const table = join(dir, "data/things");
+      assert.deepEqual(
+        rowFilesIn(table),
+        ["here.md", "shard/gone.md"],
+        "the escaping row is still a row: the loader reads it, so the enumerator reports it",
+      );
+      assert.deepEqual(
+        load(join(dir, "data")).get("things").rows.map((r) => r._file),
+        ["here.md", "shard/gone.md"],
+        "loader and enumerator still agree -- containment is a separate question",
+      );
+      assert.deepEqual(
+        escapedRowFiles(table),
+        ["shard/gone.md"],
+        "and exactly the escaping one is named",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("escapedRowFiles is empty for an ordinary table, nested or flat", () => {
+    // The common case must cost the caller nothing to check, or nobody will check it.
+    const dir = mkdtempSync(join(tmpdir(), "gitdata-contained-"));
+    const put = (rel, text) => {
+      mkdirSync(join(dir, rel, ".."), { recursive: true });
+      writeFileSync(join(dir, rel), text, "utf8");
+    };
+    put("data/things/flat.md", "---\nid: A\n---\n");
+    put("data/things/2026/01/nested.md", "---\nid: B\n---\n");
+
+    try {
+      const table = join(dir, "data/things");
+      assert.deepEqual(rowFilesIn(table), ["2026/01/nested.md", "flat.md"]);
+      assert.deepEqual(escapedRowFiles(table), [], "a nested shard on disk is not an escape");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a sharded table keeps its nested rows, and does not become a table per shard", () => {
     // Reading only the top level dropped every sharded row with no error and no count. Sharding
     // by date is the ordinary way a table outgrows one directory, so the loss was silent and
@@ -83,6 +179,14 @@ describe("load", () => {
         "2026/02/S-003--feb.md",
         "S-001--flat.md",
       ]);
+      // The exported walk is the one the loader uses, so a consumer enumerating a table for itself
+      // cannot reach a different answer than the one that got loaded. A flat `readdirSync` here
+      // returns one file out of three and calls the table complete.
+      assert.deepEqual(
+        rowFilesIn(join(shard, "data", "sessions")),
+        rows.map((r) => r._file),
+        "rowFilesIn disagreed with what load() read",
+      );
     } finally {
       rmSync(shard, { recursive: true, force: true });
     }

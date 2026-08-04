@@ -9,9 +9,24 @@
  * declared schema to be queryable. Values that are not SQL scalars (lists such as `tags`,
  * nested maps) are stored as JSON text and stay reachable via SQLite's json_each/json_extract.
  */
-import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
-
 export class ProjectError extends Error {}
+
+/**
+ * Loaded on first `project()`, not on import.
+ *
+ * At module scope this cost every consumer a WASM engine to reach anything else in the package —
+ * `src/index.js` re-exports from here, so `import { isRowFile } from "@marktiderman/gitdata"`
+ * initialised SQLite to obtain a three-line predicate. Consumers who only read rows never call
+ * `project()` or `query()` at all.
+ *
+ * `project()` was already async, so deferring costs it nothing: the first call pays what the
+ * import used to, and the module is cached for every call after.
+ */
+let sqlite3ModulePromise;
+function loadSqlite() {
+  sqlite3ModulePromise ??= import("@sqlite.org/sqlite-wasm").then((m) => m.default);
+  return sqlite3ModulePromise;
+}
 
 const quoteIdent = (s) => `"${String(s).replace(/"/g, '""')}"`;
 
@@ -83,6 +98,7 @@ function naturalKey(value) {
 }
 
 export async function project(tables) {
+  const sqlite3InitModule = await loadSqlite();
   const sqlite3 = await sqlite3InitModule({ print: () => {}, printErr: () => {} });
   const db = new sqlite3.oo1.DB(":memory:");
 
