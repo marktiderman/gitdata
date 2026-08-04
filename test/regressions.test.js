@@ -20,7 +20,6 @@ import { project, query, ProjectError } from "../src/project.js";
 import { renderTemplate, RenderError } from "../src/render.js";
 import { diffLines, formatDiff, loadViewSpecs, rollup, ViewSpecError } from "../src/rollup.js";
 import { orderBy } from "../src/shapes/sql.js";
-import { init } from "../src/init.js";
 import { loadSchemas, validate, SchemaSpecError } from "../src/validate.js";
 
 const CLI = fileURLToPath(new URL("../src/cli.js", import.meta.url));
