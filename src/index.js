@@ -17,8 +17,8 @@ export { rollup, loadViewSpecs, compileView, ViewSpecError } from "./rollup.js";
 export { init, listPacks, PackError } from "./init.js";
 
 // The pipeline, for consumers building their own tooling on top: markdown → tables → SQLite.
-export { load } from "./load.js";
-export { project, query } from "./project.js";
+export { load, LoadError } from "./load.js";
+export { project, query, ProjectError } from "./project.js";
 export { parseFrontmatter, FrontmatterError } from "./frontmatter.js";
 export { renderTemplate, RenderError } from "./render.js";
 

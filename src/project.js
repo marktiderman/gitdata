@@ -11,6 +11,8 @@
  */
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 
+export class ProjectError extends Error {}
+
 const quoteIdent = (s) => `"${String(s).replace(/"/g, '""')}"`;
 
 /** Frontmatter values are richer than SQL scalars; flatten the rest to JSON text. */
@@ -48,7 +50,9 @@ function mdSection(body, heading) {
   const text = String(body);
   const escaped = String(heading).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-  const start = new RegExp(`^##\\s+${escaped}[^\\n]*\\n`, "m").exec(text);
+  // Anchored to the end of the line so `md_section(body, 'The job')` never matches
+  // `## The job to be done` — a prefix match silently reads the wrong section.
+  const start = new RegExp(`^##\\s+${escaped}\\s*(?:\\r?\\n|$)`, "m").exec(text);
   if (!start) return "";
 
   // Cut at the next `##` heading, or run to the end of the body. Done in two steps rather than
@@ -96,6 +100,20 @@ export async function project(tables) {
     // A table with no rows still gets created — a view querying it should return nothing,
     // not fail with "no such table". `_file` guarantees at least one column exists.
     if (!columns.includes("_file")) columns.push("_file");
+
+    // SQLite column names are case-insensitive; `Status:` in one row and `status:` in another
+    // would otherwise die inside CREATE TABLE with a raw "duplicate column name" naming
+    // neither the table nor the files. Authoring variance deserves a message that does.
+    const spellings = new Map();
+    for (const c of columns) {
+      const key = c.toLowerCase();
+      if (spellings.has(key)) {
+        throw new ProjectError(
+          `table "${name}": frontmatter keys "${spellings.get(key)}" and "${c}" differ only by case — column names are case-insensitive, pick one spelling`,
+        );
+      }
+      spellings.set(key, c);
+    }
 
     db.exec(`CREATE TABLE ${quoteIdent(name)} (${columns.map(quoteIdent).join(", ")})`);
     if (rows.length === 0) continue;

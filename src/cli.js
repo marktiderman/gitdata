@@ -6,6 +6,7 @@
  * exits non-zero so a consumer can mark it a required check in their own CI — that choice is
  * theirs, not ours.
  */
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { init, listPacks } from "./init.js";
@@ -60,6 +61,7 @@ function cmdInit({ root, pack }) {
     }
     console.log("  2. gitdata rollup          # writes the view");
     console.log("  3. gitdata rollup --check  # in CI: has anything drifted?");
+    console.log("     (ran init through npx? use the same npx invocation in place of `gitdata`)");
   }
   return 0;
 }
@@ -86,7 +88,19 @@ async function cmdRollup({ root, check }) {
   return 0;
 }
 
-const args = parseArgs(process.argv.slice(2));
+const argv = process.argv.slice(2);
+// Help and version are answers, not errors — `gitdata --help && ...` must not read as a broken
+// install, and CI needs a way to ask an install what it is.
+if (argv.includes("--help") || argv.includes("-h") || argv[0] === "help") {
+  console.log(USAGE);
+  process.exit(0);
+}
+if (argv.includes("--version") || argv.includes("-V")) {
+  console.log(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);
+  process.exit(0);
+}
+
+const args = parseArgs(argv);
 try {
   if (args.command === "rollup") process.exit(await cmdRollup(args));
   if (args.command === "init") process.exit(cmdInit(args));
