@@ -31,3 +31,7 @@ export { renderTemplate, RenderError } from "./render.js";
 
 // Shapes: the registry, the dispatcher, and the error every shape throws.
 export { SHAPES, runShape, ShapeError } from "./shapes/index.js";
+
+// Introspection: table/column/type discovery, and the guarded read-only SQL escape hatch behind
+// the `tables`/`query` CLI commands.
+export { describeTables, runQuery, assertReadOnly, QueryError } from "./introspect.js";

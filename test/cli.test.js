@@ -30,6 +30,8 @@ describe("cli conventions", () => {
       const r = run([flag]);
       assert.equal(r.status, 0, `${flag} exited ${r.status}`);
       assert.match(r.stdout, /gitdata init/);
+      assert.match(r.stdout, /gitdata tables/);
+      assert.match(r.stdout, /gitdata query/);
     }
   });
 
@@ -125,5 +127,90 @@ describe("pack quickstart, end to end", () => {
     const r3 = run(["init", "--pack", "feature-management", "--root", root]);
     assert.equal(r3.status, 0);
     assert.match(r3.stdout, /0 file\(s\) written, 5 left alone/);
+  });
+});
+
+describe("tables and query, spawned against a real fixture repo", () => {
+  let tRoot;
+  before(() => {
+    tRoot = mkdtempSync(join(tmpdir(), "gitdata-cli-tables-"));
+    mkdirSync(join(tRoot, "data/things"), { recursive: true });
+    writeFileSync(join(tRoot, "data/things/a.md"), "---\nid: T-001\ntier: 1\n---\nA.\n");
+    writeFileSync(join(tRoot, "data/things/b.md"), "---\nid: T-002\ntier: 2\n---\nB.\n");
+  });
+  after(() => rmSync(tRoot, { recursive: true, force: true }));
+
+  test("tables: plain text lists every table with its columns and row count", () => {
+    const r = run(["tables", "--root", tRoot]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /things \(2 rows\)/);
+    assert.match(r.stdout, /id\s+text/);
+    assert.match(r.stdout, /tier\s+integer/);
+    assert.match(r.stdout, /_file\s+text/);
+  });
+
+  test("tables --json emits an agent-parseable array of {table, rows, columns}", () => {
+    const r = run(["tables", "--root", tRoot, "--json"]);
+    assert.equal(r.status, 0, r.stderr);
+    const parsed = JSON.parse(r.stdout);
+    assert.ok(Array.isArray(parsed));
+    const things = parsed.find((t) => t.table === "things");
+    assert.equal(things.rows, 2);
+    // Sorted by column name — deterministic regardless of frontmatter key order or directory order.
+    assert.deepEqual(
+      things.columns.map((c) => c.name),
+      ["_body", "_file", "id", "tier"],
+    );
+    assert.deepEqual(things.columns.find((c) => c.name === "tier"), { name: "tier", type: "integer" });
+  });
+
+  test("tables output is byte-identical across repeated runs", () => {
+    const r1 = run(["tables", "--root", tRoot, "--json"]);
+    const r2 = run(["tables", "--root", tRoot, "--json"]);
+    assert.equal(r1.stdout, r2.stdout);
+  });
+
+  test("query: plain text prints a readable table and the row count", () => {
+    const r = run(["query", "SELECT id, tier FROM things ORDER BY id", "--root", tRoot]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /T-001/);
+    assert.match(r.stdout, /T-002/);
+    assert.match(r.stdout, /2 rows/);
+  });
+
+  test("query --json emits rows as an array of objects", () => {
+    const r = run(["query", "SELECT id, tier FROM things ORDER BY id", "--root", tRoot, "--json"]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(JSON.parse(r.stdout), [
+      { id: "T-001", tier: 1 },
+      { id: "T-002", tier: 2 },
+    ]);
+  });
+
+  test("query works with --root given before the SQL argument", () => {
+    const r = run(["query", "--root", tRoot, "SELECT COUNT(*) AS n FROM things"]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /1/);
+  });
+
+  test("query without a SQL argument fails loud and exits 1", () => {
+    const r = run(["query", "--root", tRoot]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /requires a SQL statement/);
+  });
+
+  test("query rejects a mutating statement and exits non-zero, touching nothing", () => {
+    const r = run(["query", "UPDATE things SET tier = 99", "--root", tRoot]);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /read-only/);
+
+    // Confirm nothing was mutated — read the same table back.
+    const after = run(["query", "SELECT tier FROM things WHERE id = 'T-001'", "--root", tRoot, "--json"]);
+    assert.deepEqual(JSON.parse(after.stdout), [{ tier: 1 }]);
+  });
+
+  test("query rejects multiple statements separated by ';'", () => {
+    const r = run(["query", "SELECT 1; DROP TABLE things", "--root", tRoot]);
+    assert.notEqual(r.status, 0);
   });
 });
