@@ -65,6 +65,35 @@ describe("load", () => {
     assert.ok(!isRowFile("ReadMe.md"), "case-insensitively — the loader's docstring says so");
     assert.ok(!isRowFile("notes.txt"), "the format does not move: rows are markdown");
     assert.ok(!isRowFile("row.md.bak"), "an editor backup is not a row");
+    assert.ok(!isRowFile(".hidden.md"), "the walk skips `.` entries, so the predicate must too");
+    assert.ok(!isRowFile(".DS_Store.md"), "no `.`-prefixed file is a row, whatever its extension");
+  });
+
+  test("isRowFile agrees with the loader about a `.`-prefixed file", () => {
+    // Asserting the predicate alone would have passed while the loader skipped the file: the walk
+    // filters `.` entries before the predicate is ever consulted, so the disagreement is invisible
+    // until the predicate is handed out on its own. This compares the two against ONE directory
+    // rather than trusting either in isolation.
+    const dir = mkdtempSync(join(tmpdir(), "gitdata-dot-"));
+    const put = (rel, text) => {
+      mkdirSync(join(dir, rel, ".."), { recursive: true });
+      writeFileSync(join(dir, rel), text, "utf8");
+    };
+    put("data/things/a.md", "---\nid: A\n---\nVisible.\n");
+    put("data/things/.hidden.md", "---\nid: H\n---\nHidden.\n");
+
+    try {
+      assert.deepEqual(rowFilesIn(join(dir, "data/things")), ["a.md"]);
+      assert.deepEqual(
+        load(join(dir, "data"))
+          .get("things")
+          .rows.map((r) => r._file),
+        ["a.md"],
+        "loader and predicate must answer identically",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("a sharded table keeps its nested rows, and does not become a table per shard", () => {

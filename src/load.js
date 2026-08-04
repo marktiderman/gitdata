@@ -26,13 +26,22 @@ export class LoadError extends Error {}
  * What counts as a row. Exported because it is a contract, not a detail.
  *
  * A consumer that writes into `data/` has to answer the same question this loader answers, and
- * with nothing to import it answers it by copying these three clauses. The copy is then free to
+ * with nothing to import it answers it by copying these four clauses. The copy is then free to
  * drift, and drift here is not symmetric: a consumer that deletes rows by its own copy of the rule
  * either deletes a file the loader protects, or leaves behind one the loader reads. Both are
  * silent, and both are the failure this project exists to prevent — one repo away.
+ *
+ * The dot clause is not decoration. The walk skips `.`-prefixed entries, so `.hidden.md` is never
+ * loaded as a row — but a predicate without this clause calls it one. That gap is invisible while
+ * the rule lives inside the loader and the walk filters first; the moment it is handed out, a
+ * consumer asking "is this a row?" gets an answer the loader would not give. Exporting a predicate
+ * that disagrees with the loader would recreate, inside this file, the drift exporting it prevents.
  */
 export const isRowFile = (name) =>
-  name.endsWith(".md") && !name.startsWith("_") && name.toLowerCase() !== "readme.md";
+  name.endsWith(".md") &&
+  !name.startsWith("_") &&
+  !name.startsWith(".") &&
+  name.toLowerCase() !== "readme.md";
 
 /**
  * Classify an entry by what it points AT, not what it is: a Dirent for a symlink reports neither
