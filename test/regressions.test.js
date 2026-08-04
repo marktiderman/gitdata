@@ -12,7 +12,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, test } from "node:test";
 
+import { codeownersLines, emitCodeowners, EmitError, renderCodeowners } from "../src/emit-codeowners.js";
 import { parseFrontmatter, FrontmatterError } from "../src/frontmatter.js";
+import { init } from "../src/init.js";
 import { load, LoadError } from "../src/load.js";
 import { project, query, ProjectError } from "../src/project.js";
 import { renderTemplate, RenderError } from "../src/render.js";
@@ -242,6 +244,167 @@ describe("rollup containment and drift", () => {
       const results = await rollup({ dataRoot: join(r.root, "data"), repoRoot: r.root, check: true });
       assert.equal(results[0].status, "missing");
       assert.ok(!existsSync(join(r.root, "data/_views/v.md")), "check mode wrote a file");
+    } finally {
+      r.rm();
+    }
+  });
+});
+
+describe("emit codeowners", () => {
+  test("a table with no _owners.yml gets no CODEOWNERS line", () => {
+    const r = repo("gitdata-codeowners-none-");
+    try {
+      r.write("data/things/T-001.md", "---\nid: T-001\n---\nBody.\n");
+      assert.deepEqual(codeownersLines({ dataRoot: join(r.root, "data"), repoRoot: r.root }), []);
+      assert.equal(renderCodeowners({ dataRoot: join(r.root, "data"), repoRoot: r.root }), null);
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("lines are sorted by table name, never directory order", () => {
+    const r = repo("gitdata-codeowners-sort-");
+    try {
+      // Written zebras-then-apples on purpose: alphabetical output must not be an accident of
+      // write order, the same determinism guarantee `load()` gives table rows.
+      r.write("data/zebras/Z-1.md", "---\nid: Z-1\n---\nZ.\n");
+      r.write("data/zebras/_owners.yml", 'owners: ["@zoo"]\n');
+      r.write("data/apples/A-1.md", "---\nid: A-1\n---\nA.\n");
+      r.write("data/apples/_owners.yml", 'owners: ["@orchard"]\n');
+
+      const lines = codeownersLines({ dataRoot: join(r.root, "data"), repoRoot: r.root });
+      assert.deepEqual(lines, ["/data/apples/** @orchard", "/data/zebras/** @zoo"]);
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("a repo-wide data/_owners.yml default is emitted first, before per-table lines", () => {
+    const r = repo("gitdata-codeowners-default-");
+    try {
+      r.write("data/_owners.yml", 'owners: ["@default-team"]\n');
+      r.write("data/things/T-001.md", "---\nid: T-001\n---\nBody.\n");
+      r.write("data/things/_owners.yml", 'owners: ["@things-team"]\n');
+
+      const lines = codeownersLines({ dataRoot: join(r.root, "data"), repoRoot: r.root });
+      // GitHub's own last-match-wins rule is what lets the more specific line that follows
+      // override the default — gitdata only has to get the order right, never the precedence.
+      assert.deepEqual(lines, ["/data/** @default-team", "/data/things/** @things-team"]);
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("owners must be a non-empty list of strings — a bad shape fails loud naming the file", () => {
+    const r = repo("gitdata-codeowners-bad-");
+    try {
+      r.write("data/things/T-001.md", "---\nid: T-001\n---\nBody.\n");
+      r.write("data/things/_owners.yml", "owners: []\n");
+      assert.throws(() => codeownersLines({ dataRoot: join(r.root, "data"), repoRoot: r.root }), (err) => {
+        assert.ok(err instanceof EmitError);
+        assert.match(err.message, /things\/_owners\.yml/);
+        assert.match(err.message, /non-empty list/);
+        return true;
+      });
+
+      r.write("data/things/_owners.yml", "owners:\n  - \"\"\n");
+      assert.throws(() => codeownersLines({ dataRoot: join(r.root, "data"), repoRoot: r.root }), /non-empty string/);
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("check reports 'missing' for a never-emitted CODEOWNERS and writes nothing", () => {
+    const r = repo("gitdata-codeowners-missing-");
+    try {
+      r.write("data/things/T-001.md", "---\nid: T-001\n---\nBody.\n");
+      r.write("data/things/_owners.yml", 'owners: ["@team"]\n');
+      const outPath = join(r.root, ".github/CODEOWNERS");
+
+      const result = emitCodeowners({ dataRoot: join(r.root, "data"), repoRoot: r.root, outPath, check: true });
+      assert.equal(result.status, "missing");
+      assert.ok(!existsSync(outPath), "check mode wrote a file");
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("check reports 'drifted' against a hand-edited CODEOWNERS, and a clean re-run is byte-identical", () => {
+    const r = repo("gitdata-codeowners-drift-");
+    try {
+      r.write("data/things/T-001.md", "---\nid: T-001\n---\nBody.\n");
+      r.write("data/things/_owners.yml", 'owners: ["@team"]\n');
+      const outPath = join(r.root, ".github/CODEOWNERS");
+
+      const first = emitCodeowners({ dataRoot: join(r.root, "data"), repoRoot: r.root, outPath });
+      assert.equal(first.status, "written");
+      const bytes = readFileSync(outPath, "utf8");
+
+      // Clean → unchanged, determinism observed rather than assumed.
+      assert.equal(
+        emitCodeowners({ dataRoot: join(r.root, "data"), repoRoot: r.root, outPath, check: true }).status,
+        "unchanged",
+      );
+
+      writeFileSync(outPath, bytes + "\n# hand-added\n");
+      const drift = emitCodeowners({ dataRoot: join(r.root, "data"), repoRoot: r.root, outPath, check: true });
+      assert.equal(drift.status, "drifted");
+      assert.equal(readFileSync(outPath, "utf8"), bytes + "\n# hand-added\n", "check mode wrote a file");
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("no _owners.yml anywhere leaves an existing hand-authored CODEOWNERS untouched", () => {
+    const r = repo("gitdata-codeowners-empty-");
+    try {
+      r.write("data/things/T-001.md", "---\nid: T-001\n---\nBody.\n");
+      const outPath = join(r.root, ".github/CODEOWNERS");
+      r.write(".github/CODEOWNERS", "* @hand-authored\n");
+
+      const result = emitCodeowners({ dataRoot: join(r.root, "data"), repoRoot: r.root, outPath });
+      assert.equal(result.status, "empty");
+      assert.equal(readFileSync(outPath, "utf8"), "* @hand-authored\n");
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("a repo with no data/ directory at all reports 'empty' instead of crashing", () => {
+    const r = repo("gitdata-codeowners-nodata-");
+    try {
+      const outPath = join(r.root, ".github/CODEOWNERS");
+      const result = emitCodeowners({ dataRoot: join(r.root, "data"), repoRoot: r.root, outPath });
+      assert.equal(result.status, "empty");
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("real specimen: feature-management's features table produces the exact byte output", () => {
+    // Law 6: validated against a real committed artifact — the actual shipped pack, scaffolded
+    // through the real `init()`, not a hand-rolled fixture that merely resembles it.
+    const r = repo("gitdata-codeowners-specimen-");
+    try {
+      const { written } = init({ root: r.root, pack: "feature-management" });
+      assert.ok(written.includes("data/features/_template.md"));
+
+      r.write("data/features/_owners.yml", 'owners:\n  - "@alice"\n  - "@bob"\n');
+
+      const dataRoot = join(r.root, "data");
+      const expected =
+        "# CODEOWNERS — generated by `gitdata emit codeowners` from data/<table>/_owners.yml.\n" +
+        "# Do not hand-edit: `gitdata emit codeowners --check` fails if you do.\n" +
+        "# Declare ownership as data — add or edit a table's _owners.yml, then re-run.\n" +
+        "\n" +
+        "/data/features/** @alice @bob\n";
+
+      assert.equal(renderCodeowners({ dataRoot, repoRoot: r.root }), expected);
+
+      const outPath = join(r.root, ".github/CODEOWNERS");
+      const result = emitCodeowners({ dataRoot, repoRoot: r.root, outPath });
+      assert.equal(result.status, "written");
+      assert.equal(readFileSync(outPath, "utf8"), expected);
     } finally {
       r.rm();
     }

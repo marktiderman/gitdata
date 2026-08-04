@@ -53,8 +53,10 @@ data/
     2026/01/<row>.md  nested rows belong to <table>; shard freely
     _template.md      `_` prefix = never a row
     README.md         documents the table; never a row
+    _owners.yml       reviewers for this table — read by `gitdata emit codeowners`
   _views/             view specs and the artifacts they generate
   _schema/            table contracts — required/unique/enum/pattern/ref, read by `gitdata validate`
+  _owners.yml         repo-wide default reviewers for data/** (optional)
 ```
 
 Column discovery is the union of frontmatter keys across a table's rows, so a table needs no
@@ -82,6 +84,18 @@ into `src/validate.js`.
 
 gitdata now guarantees both that **artifacts match sources** (`rollup --check`) and, wherever a
 schema opts in, that **those sources are well-formed** (`validate`).
+
+## `emit codeowners`
+
+The first half of rule 5's "GitHub enforces" is built: `gitdata emit codeowners` reads
+`data/<table>/_owners.yml` (and an optional repo-wide `data/_owners.yml` default) and writes a
+GitHub-format `.github/CODEOWNERS`, one `path/pattern @owner` line per table that declares
+ownership. A table with none gets no line — like `validate`, ownership is opt-in, never inferred.
+
+`--check` reports drift without writing, the same contract `rollup --check` gives content. What
+this does *not* do, on purpose: it never edits branch protection, never adds required reviewers,
+never blocks a merge. It only ever reads `data/` and writes one file — turning that file into an
+enforced gate is a GitHub repo setting, made by a human, every time.
 
 ## Packs and versioning
 

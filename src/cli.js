@@ -7,8 +7,9 @@
  * theirs, not ours.
  */
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 
+import { emitCodeowners } from "./emit-codeowners.js";
 import { init, listPacks } from "./init.js";
 import { diffLines, formatDiff, rollup } from "./rollup.js";
 import { validate } from "./validate.js";
@@ -19,6 +20,8 @@ const USAGE = `gitdata — docs as data in git
   gitdata rollup [--check] [--diff] [--json] [--root <dir>]
                                                           regenerate views | report drift without writing
   gitdata validate [--root <dir>]                        check rows against data/_schema/*.schema.yml
+  gitdata emit codeowners [--check] [--root <dir>] [--out <path>]
+                                                          emit .github/CODEOWNERS from data/*/_owners.yml
   gitdata packs                                          list available packs
 
 Options:
@@ -28,18 +31,24 @@ Options:
                  without --check; a normal rollup writes, it does not compare.
   --json         with --check: emit a structured drift report on stdout instead of the plain-text
                  listing. No effect without --check. Combine with --diff to include diff content.
+  --out <path>   emit codeowners: output path (default: <root>/.github/CODEOWNERS)
 `;
 
 function parseArgs(argv) {
+  // A subcommand is argv[1] when it isn't itself a flag — `emit codeowners`, never `rollup
+  // --check` mistaken for a subcommand named "--check".
+  const sub = argv[1] && !argv[1].startsWith("--") ? argv[1] : null;
   const args = {
     command: argv[0],
+    sub,
     check: argv.includes("--check"),
     diff: argv.includes("--diff"),
     json: argv.includes("--json"),
     root: process.cwd(),
     pack: null,
+    out: null,
   };
-  for (const [flag, key] of [["--root", "root"], ["--pack", "pack"]]) {
+  for (const [flag, key] of [["--root", "root"], ["--pack", "pack"], ["--out", "out"]]) {
     const i = argv.indexOf(flag);
     if (i === -1) continue;
     if (!argv[i + 1] || argv[i + 1].startsWith("--")) throw new Error(`${flag} requires a value`);
@@ -162,6 +171,26 @@ function cmdValidate({ root }) {
   return 0;
 }
 
+async function cmdEmitCodeowners({ root, check, out }) {
+  const outPath = resolve(root, out ?? ".github/CODEOWNERS");
+  const result = emitCodeowners({ dataRoot: resolve(root, "data"), repoRoot: root, outPath, check });
+
+  if (result.status === "empty") {
+    console.log("  no ownership declared — add data/<table>/_owners.yml, then re-run");
+    return 0;
+  }
+
+  const mark = { written: "✎", unchanged: "·", drifted: "✗", missing: "✗" }[result.status];
+  console.log(`  ${mark} ${relative(root, result.out).padEnd(24)} ${result.status}`);
+
+  if (check && (result.status === "drifted" || result.status === "missing")) {
+    console.log("\n  CODEOWNERS is out of date — run `gitdata emit codeowners` and commit the result.");
+    return 1;
+  }
+  console.log(`\n  codeowners ${check ? "checked" : "emitted"}.`);
+  return 0;
+}
+
 const argv = process.argv.slice(2);
 // Help and version are answers, not errors — `gitdata --help && ...` must not read as a broken
 // install, and CI needs a way to ask an install what it is.
@@ -179,6 +208,7 @@ try {
   if (args.command === "rollup") process.exit(await cmdRollup(args));
   if (args.command === "init") process.exit(cmdInit(args));
   if (args.command === "validate") process.exit(cmdValidate(args));
+  if (args.command === "emit" && args.sub === "codeowners") process.exit(await cmdEmitCodeowners(args));
   if (args.command === "packs") process.exit(cmdPacks());
   console.log(USAGE);
   process.exit(args.command ? 1 : 0);

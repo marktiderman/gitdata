@@ -51,6 +51,8 @@ gitdata init --pack feature-management   # scaffold tables, templates and a boar
 gitdata rollup                           # regenerate every view
 gitdata rollup --check                   # compile in memory, report drift, write nothing
 gitdata validate                         # check rows against data/_schema/*.schema.yml
+gitdata emit codeowners                  # write .github/CODEOWNERS from data/*/_owners.yml
+gitdata emit codeowners --check          # report drift, write nothing
 gitdata packs                            # what's available to install
 ```
 
@@ -156,10 +158,21 @@ baked into gitdata itself.
 
 ## Status
 
-`init`, `rollup`, and `validate` are built. Emitting GitHub configuration (CODEOWNERS stanzas,
-required-check wiring) is not built yet — that half of the law is direction, not capability. Until
-it exists, wire enforcement by hand: a CODEOWNERS pattern per `data/<table>/**`, branch protection
-requiring a `gitdata rollup --check` job.
+`init`, `rollup`, `validate`, and `emit codeowners` are built.
+
+`emit codeowners` reads `data/<table>/_owners.yml` and writes `.github/CODEOWNERS` — a table with
+no `_owners.yml` gets no line; ownership is opt-in, never inferred:
+
+```bash
+gitdata emit codeowners           # write .github/CODEOWNERS from data/*/_owners.yml
+gitdata emit codeowners --check   # CI: has ownership drifted from what's committed?
+```
+
+What is still direction, not capability: required-check wiring (turning `gitdata rollup --check`,
+`gitdata validate`, and `gitdata emit codeowners --check` into GitHub branch-protection rules is
+still a manual repo setting, not something gitdata configures for you) and ownership for anything
+outside `data/` — a repo-wide catch-all, `/README.md`, `/CLAUDE.md` — which stays hand-authored in
+the same file.
 
 Layers, rules, and the gap: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

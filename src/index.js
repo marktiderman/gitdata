@@ -20,6 +20,9 @@ export { init, listPacks, PackError } from "./init.js";
 // Check rows against data/_schema/<table>.schema.yml — opt-in, reports only, never blocks.
 export { validate, loadSchemas, SchemaSpecError } from "./validate.js";
 
+// Emit .github/CODEOWNERS from data/<table>/_owners.yml, or report drift without writing.
+export { emitCodeowners, codeownersLines, renderCodeowners, EmitError } from "./emit-codeowners.js";
+
 // The pipeline, for consumers building their own tooling on top: markdown → tables → SQLite.
 export { load, LoadError } from "./load.js";
 export { project, query, ProjectError } from "./project.js";
