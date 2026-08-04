@@ -59,9 +59,9 @@ gitdata packs                            # what's available to install
 Start from nothing in one command:
 
 ```bash
-npx github:marktiderman/gitdata init --pack feature-management
+npx @marktiderman/gitdata init --pack feature-management
 cp data/features/_template.md data/features/F-001--dark-mode.md   # edit it
-npx github:marktiderman/gitdata rollup
+npx @marktiderman/gitdata rollup
 ```
 
 `data/_views/features-board.md` now exists, generated from your files:

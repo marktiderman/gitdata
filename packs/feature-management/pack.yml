@@ -25,12 +25,13 @@ installs:
 
 # After install:
 #   cp data/features/_template.md data/features/F-001--my-feature.md   (then edit it)
-#   npx github:marktiderman/gitdata rollup                              (writes the board)
-#   npx github:marktiderman/gitdata rollup --check                      (CI: has it drifted?)
-#   npx github:marktiderman/gitdata validate                            (CI: does every row hold up?)
+#   npx @marktiderman/gitdata rollup                                    (writes the board)
+#   npx @marktiderman/gitdata rollup --check                            (CI: has it drifted?)
+#   npx @marktiderman/gitdata validate                                  (CI: does every row hold up?)
 #
-# Use the github: spec until the scoped package is actually published — @marktiderman/gitdata is
-# not on the registry yet, and instructions that 404 teach people to improvise. Never the bare
-# name: unscoped `gitdata` on npm is an unrelated 2016 package by another author — the bare
-# command fetches and runs a stranger's code, in a pack, on somebody else's machine, on our
-# instruction. test/boundaries.test.js keeps this from coming back.
+# Always the SCOPED name. @marktiderman/gitdata is on the registry as of v0.1.0, so the scoped
+# form resolves — pin it (`@marktiderman/gitdata@0.1.0`) in CI, where a floating version means a
+# drift check that can change under you. Never the bare name: unscoped `gitdata` on npm is an
+# unrelated 2016 package by another author — the bare command fetches and runs a stranger's code,
+# in a pack, on somebody else's machine, on our instruction. test/boundaries.test.js keeps this
+# from coming back.

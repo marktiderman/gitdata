@@ -22,7 +22,7 @@ history, and blame intact.
 ```bash
 cp data/features/_template.md data/features/F-001--my-feature.md
 # edit it, then:
-npx github:marktiderman/gitdata rollup
+npx @marktiderman/gitdata rollup
 ```
 
 The board at `data/_views/features-board.md` regenerates from these files. Never edit the board
