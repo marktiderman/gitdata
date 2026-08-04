@@ -50,6 +50,7 @@ for fifty years, and inventing a query language in YAML is how small tools becom
 gitdata init --pack feature-management   # scaffold tables, templates and a board
 gitdata rollup                           # regenerate every view
 gitdata rollup --check                   # compile in memory, report drift, write nothing
+gitdata validate                         # check rows against data/_schema/*.schema.yml
 gitdata packs                            # what's available to install
 ```
 
@@ -125,13 +126,40 @@ data means.
 | `md_section(body, heading)` | pull one `## heading` section out of a file body and flatten it to a line |
 | `natural_key(text)` | sortable key for dotted ids, so `1.10` sorts after `1.9` rather than after `1.1` |
 
+## Validating rows
+
+A table's contract is optional, and lives beside its data: `data/_schema/<table>.schema.yml`.
+
+```yaml
+kind: table-schema
+required: [id, title, status]
+unique: [id]
+enum:
+  status: [idea, planned, building, shipped, dropped]
+pattern:
+  id: "^F-\\d{3}$"
+ref:
+  parent: features.id
+```
+
+```bash
+gitdata validate
+```
+
+reads every `data/_schema/*.schema.yml`, checks that table's rows, and exits non-zero — like
+`rollup --check` — if any rule fails, naming the table, the row's file, the rule, and why. A table
+with no schema file is simply not checked; a repo with no `data/_schema/` at all passes with zero
+issues. `required`, `unique`, `enum`, `pattern`, and `ref` (a foreign-key-style check against
+another table's column) are all the vocabulary the engine knows — same as SQL functions, more
+never gets added here. What columns get which rules is your call, declared in your schema, never
+baked into gitdata itself.
+
 ## Status
 
-`init` and `rollup` are built. `validate` is not: nothing checks a row against a schema, so a table
-accepts any frontmatter and an unedited template rolls up as real data. Emitting GitHub
-configuration (CODEOWNERS stanzas, required-check wiring) is also not built yet — that half of the
-law is direction, not capability. Until it exists, wire enforcement by hand: a CODEOWNERS pattern
-per `data/<table>/**`, branch protection requiring a `gitdata rollup --check` job.
+`init`, `rollup`, and `validate` are built. Emitting GitHub configuration (CODEOWNERS stanzas,
+required-check wiring) is not built yet — that half of the law is direction, not capability. Until
+it exists, wire enforcement by hand: a CODEOWNERS pattern per `data/<table>/**`, branch protection
+requiring a `gitdata rollup --check` job.
 
 Layers, rules, and the gap: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

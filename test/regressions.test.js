@@ -10,7 +10,7 @@ import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, test } from "node:test";
+import { after, before, describe, test } from "node:test";
 
 import { parseFrontmatter, FrontmatterError } from "../src/frontmatter.js";
 import { load, LoadError } from "../src/load.js";
@@ -18,6 +18,8 @@ import { project, query, ProjectError } from "../src/project.js";
 import { renderTemplate, RenderError } from "../src/render.js";
 import { diffLines, formatDiff, loadViewSpecs, rollup, ViewSpecError } from "../src/rollup.js";
 import { orderBy } from "../src/shapes/sql.js";
+import { init } from "../src/init.js";
+import { loadSchemas, validate, SchemaSpecError } from "../src/validate.js";
 
 const CLI = fileURLToPath(new URL("../src/cli.js", import.meta.url));
 const runCli = (args) => spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8" });
@@ -420,5 +422,257 @@ describe("--check --diff / --json surface the drift instead of discarding it", (
     } finally {
       r.rm();
     }
+  });
+});
+
+let root;
+
+function write(rel, text) {
+  const path = join(root, rel);
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, text, "utf8");
+}
+
+before(() => {
+  root = mkdtempSync(join(tmpdir(), "gitdata-validate-"));
+
+  write(
+    "data/_schema/widgets.schema.yml",
+    [
+      "kind: table-schema",
+      "required: [id, title, status]",
+      "unique: [id]",
+      "enum:",
+      "  status: [idea, shipped]",
+      "pattern:",
+      "  id: '^W-\\d{3}$'",
+      "ref:",
+      "  parent: widgets.id",
+      "",
+    ].join("\n"),
+  );
+
+  write("data/widgets/w1.md", "---\nid: W-001\ntitle: One\nstatus: idea\nparent: null\n---\n");
+  // Missing `title`, invalid status, malformed id, and a parent naming no row — one row that
+  // trips every rule at once so a report is proven to carry all of them, not just the first hit.
+  write("data/widgets/w2.md", "---\nid: BAD\nstatus: nope\nparent: nowhere\n---\n");
+  // Shares W-001's id with w1 — the duplicate `unique` must catch.
+  write("data/widgets/w3.md", "---\nid: W-001\ntitle: Also one\nstatus: shipped\nparent: W-001\n---\n");
+});
+
+after(() => rmSync(root, { recursive: true, force: true }));
+
+describe("loadSchemas", () => {
+  test("a repo with no data/_schema/ has no schemas — validate is opt-in, not mandatory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gitdata-noschema-"));
+    try {
+      assert.deepEqual(loadSchemas(join(dir, "data")), []);
+      assert.deepEqual(validate({ dataRoot: join(dir, "data") }), { tables: [], issues: [] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a `table:` field that disagrees with its filename fails loud, not silently on the wrong table", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gitdata-tablemismatch-"));
+    try {
+      mkdirSync(join(dir, "data/_schema"), { recursive: true });
+      writeFileSync(join(dir, "data/_schema/widgets.schema.yml"), "table: gadgets\nrequired: [id]\n");
+      assert.throws(() => loadSchemas(join(dir, "data")), SchemaSpecError, /disagrees with its filename/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an unrecognized rule key fails loud rather than being silently ignored", () => {
+    // A typo'd rule (`requird:`) that the engine ignores would validate nothing and report
+    // success — worse than not having a schema at all, because it looks checked.
+    const dir = mkdtempSync(join(tmpdir(), "gitdata-badrule-"));
+    try {
+      mkdirSync(join(dir, "data/_schema"), { recursive: true });
+      writeFileSync(join(dir, "data/_schema/widgets.schema.yml"), "requird: [id]\n");
+      assert.throws(() => loadSchemas(join(dir, "data")), SchemaSpecError, /unknown rule/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a ref target that is not `table.column` fails loud at validate time", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gitdata-badref-"));
+    try {
+      mkdirSync(join(dir, "data/_schema"), { recursive: true });
+      mkdirSync(join(dir, "data/widgets"), { recursive: true });
+      writeFileSync(join(dir, "data/_schema/widgets.schema.yml"), "ref:\n  parent: widgets\n");
+      writeFileSync(join(dir, "data/widgets/w.md"), "---\nid: W-001\nparent: W-001\n---\n");
+      assert.throws(() => validate({ dataRoot: join(dir, "data") }), SchemaSpecError, /table\.column/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an invalid regex in `pattern:` fails loud rather than throwing an opaque RegExp error", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gitdata-badpattern-"));
+    try {
+      mkdirSync(join(dir, "data/_schema"), { recursive: true });
+      mkdirSync(join(dir, "data/widgets"), { recursive: true });
+      writeFileSync(join(dir, "data/_schema/widgets.schema.yml"), "pattern:\n  id: '('\n");
+      writeFileSync(join(dir, "data/widgets/w.md"), "---\nid: W-001\n---\n");
+      assert.throws(() => validate({ dataRoot: join(dir, "data") }), SchemaSpecError, /widgets\.schema\.yml/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("validate", () => {
+  test("required: a missing column is reported by table, file, rule and column — not just a count", () => {
+    const { issues } = validate({ dataRoot: join(root, "data") });
+    const missing = issues.find((i) => i.rule === "required" && i.file === "w2.md");
+    assert.ok(missing, "expected a required-column issue for w2.md");
+    assert.equal(missing.table, "widgets");
+    assert.equal(missing.column, "title");
+  });
+
+  test("unique: both rows sharing a value are flagged, not just the second one seen", () => {
+    // Flagging only the later row hides which row is "correct" — both must be named so an author
+    // can tell the two apart without re-deriving the collision by hand.
+    const { issues } = validate({ dataRoot: join(root, "data") });
+    const dupes = issues.filter((i) => i.rule === "unique" && i.column === "id");
+    assert.deepEqual(
+      dupes.map((i) => i.file).sort(),
+      ["w1.md", "w3.md"],
+    );
+  });
+
+  test("enum: a value outside the declared set is flagged, naming what it must be", () => {
+    const { issues } = validate({ dataRoot: join(root, "data") });
+    const bad = issues.find((i) => i.rule === "enum" && i.file === "w2.md");
+    assert.ok(bad);
+    assert.match(bad.message, /idea, shipped/);
+  });
+
+  test("pattern: a value failing the regex is flagged", () => {
+    const { issues } = validate({ dataRoot: join(root, "data") });
+    assert.ok(issues.some((i) => i.rule === "pattern" && i.file === "w2.md" && i.column === "id"));
+  });
+
+  test("ref: a value naming no row in the target table/column is flagged, a self-reference is not", () => {
+    // w3's parent (`W-001`) resolves to w1 — a self-referencing table must not treat "some row
+    // in my own table" as automatically dangling just because it's the same table being checked.
+    const { issues } = validate({ dataRoot: join(root, "data") });
+    assert.ok(issues.some((i) => i.rule === "ref" && i.file === "w2.md" && i.column === "parent"));
+    assert.ok(!issues.some((i) => i.rule === "ref" && i.file === "w3.md"));
+  });
+
+  test("null is a legitimate absence, not a dangling reference — w1's null parent draws no ref issue", () => {
+    // w1 also shares its id with w3 (the `unique` fixture above), so it legitimately carries a
+    // `unique` issue — this checks only that `ref` treats its null `parent` as absence, not as a
+    // value that fails to resolve.
+    const { issues } = validate({ dataRoot: join(root, "data") });
+    assert.ok(!issues.some((i) => i.file === "w1.md" && i.rule === "ref"));
+  });
+
+  test("a table with no schema file is not checked, even when a sibling table has one", () => {
+    write("data/untouched/u1.md", "---\nnonsense: yes\n---\n");
+    const { tables, issues } = validate({ dataRoot: join(root, "data") });
+    assert.deepEqual(tables, ["widgets"]);
+    assert.ok(!issues.some((i) => i.table === "untouched"));
+  });
+
+  test("issue order is deterministic — sorted by table, file, rule, column, not Map/object iteration order", () => {
+    const a = validate({ dataRoot: join(root, "data") }).issues;
+    const b = validate({ dataRoot: join(root, "data") }).issues;
+    assert.deepEqual(a, b);
+    const sorted = [...a].sort(
+      (x, y) =>
+        x.table.localeCompare(y.table) ||
+        x.file.localeCompare(y.file) ||
+        x.rule.localeCompare(y.rule) ||
+        x.column.localeCompare(y.column),
+    );
+    assert.deepEqual(a, sorted);
+  });
+});
+
+describe("gitdata validate (CLI)", () => {
+  test("exits non-zero and prints table/file/rule/reason when rows fail their schema", () => {
+    const result = runCli(["validate", "--root", root]);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /widgets/);
+    assert.match(result.stdout, /w2\.md/);
+    assert.match(result.stdout, /required|enum|pattern|ref/);
+  });
+
+  test("exits zero and reports nothing to check when no data/_schema/ exists", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gitdata-cli-noschema-"));
+    try {
+      mkdirSync(join(dir, "data"), { recursive: true });
+      const result = runCli(["validate", "--root", dir]);
+      assert.equal(result.status, 0);
+      assert.match(result.stdout, /no schemas found/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("exits zero when every row satisfies its schema", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gitdata-cli-clean-"));
+    try {
+      mkdirSync(join(dir, "data/_schema"), { recursive: true });
+      mkdirSync(join(dir, "data/widgets"), { recursive: true });
+      writeFileSync(join(dir, "data/_schema/widgets.schema.yml"), "required: [id]\n");
+      writeFileSync(join(dir, "data/widgets/w.md"), "---\nid: W-001\n---\n");
+      const result = runCli(["validate", "--root", dir]);
+      assert.equal(result.status, 0);
+      assert.match(result.stdout, /0 issues/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("--help documents validate alongside rollup and init", () => {
+    const result = runCli([]);
+    assert.match(result.stdout, /gitdata validate/);
+  });
+});
+
+describe("real specimen: the feature-management pack's shipped schema", () => {
+  // Law 6: proved against the actual committed pack files — copied onto disk by the real `init`
+  // pipeline, not retyped as inline YAML — rather than a schema invented only for this test.
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), "gitdata-pack-schema-"));
+    init({ root: dir, pack: "feature-management" });
+  });
+
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("the pack ships data/_schema/features.schema.yml", () => {
+    const [schema] = loadSchemas(join(dir, "data"));
+    assert.equal(schema.table, "features");
+    assert.deepEqual(schema.unique, ["id"]);
+  });
+
+  test("the pack's own _template.md, copied to a real row, satisfies the pack's own schema", () => {
+    // The template's placeholder values (F-000, status: idea, priority: P2) are themselves a
+    // worked example — if they didn't satisfy the shipped schema, the pack would be handing new
+    // users a first row that fails their own first `gitdata validate`.
+    const templateText = readFileSync(join(dir, "data/features/_template.md"), "utf8");
+    writeFileSync(join(dir, "data/features/F-000--example.md"), templateText, "utf8");
+
+    const { issues } = validate({ dataRoot: join(dir, "data") });
+    assert.deepEqual(issues, []);
+  });
+
+  test("mutating the copied template to violate the shipped schema is caught", () => {
+    const templateText = readFileSync(join(dir, "data/features/_template.md"), "utf8");
+    const broken = templateText.replace("status: idea", "status: not-a-real-status");
+    writeFileSync(join(dir, "data/features/F-001--broken.md"), broken, "utf8");
+
+    const { issues } = validate({ dataRoot: join(dir, "data") });
+    const found = issues.find((i) => i.file === "F-001--broken.md" && i.rule === "enum");
+    assert.ok(found, "expected the shipped enum rule to reject an invalid status");
+    assert.equal(found.column, "status");
   });
 });

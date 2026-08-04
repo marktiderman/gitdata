@@ -11,12 +11,14 @@ import { resolve } from "node:path";
 
 import { init, listPacks } from "./init.js";
 import { diffLines, formatDiff, rollup } from "./rollup.js";
+import { validate } from "./validate.js";
 
 const USAGE = `gitdata — docs as data in git
 
   gitdata init [--pack <name>] [--root <dir>]           scaffold data/ — bare, or from a pack
   gitdata rollup [--check] [--diff] [--json] [--root <dir>]
                                                           regenerate views | report drift without writing
+  gitdata validate [--root <dir>]                        check rows against data/_schema/*.schema.yml
   gitdata packs                                          list available packs
 
 Options:
@@ -140,6 +142,26 @@ async function cmdRollup({ root, check, diff, json }) {
   return 0;
 }
 
+function cmdValidate({ root }) {
+  const { tables, issues } = validate({ dataRoot: resolve(root, "data") });
+
+  if (tables.length === 0) {
+    console.log("  no schemas found — add data/_schema/<table>.schema.yml");
+    return 0;
+  }
+
+  for (const i of issues) {
+    console.log(`  ✗ ${i.table.padEnd(16)} ${String(i.file).padEnd(28)} ${i.rule.padEnd(9)} ${i.message}`);
+  }
+
+  if (issues.length > 0) {
+    console.log(`\n  ${issues.length} issue(s) across ${tables.length} table(s) checked.`);
+    return 1;
+  }
+  console.log(`  ${tables.length} table(s) checked, 0 issues.`);
+  return 0;
+}
+
 const argv = process.argv.slice(2);
 // Help and version are answers, not errors — `gitdata --help && ...` must not read as a broken
 // install, and CI needs a way to ask an install what it is.
@@ -156,6 +178,7 @@ const args = parseArgs(argv);
 try {
   if (args.command === "rollup") process.exit(await cmdRollup(args));
   if (args.command === "init") process.exit(cmdInit(args));
+  if (args.command === "validate") process.exit(cmdValidate(args));
   if (args.command === "packs") process.exit(cmdPacks());
   console.log(USAGE);
   process.exit(args.command ? 1 : 0);

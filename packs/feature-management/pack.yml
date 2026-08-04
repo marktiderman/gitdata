@@ -21,11 +21,13 @@ installs:
   - data/features/_template.md      # the exemplar to copy for a new feature
   - data/features/README.md         # what a row means
   - data/_views/features-board.view.yml
+  - data/_schema/features.schema.yml # required/unique/enum/pattern/ref — `gitdata validate` reads this
 
 # After install:
 #   cp data/features/_template.md data/features/F-001--my-feature.md   (then edit it)
 #   npx github:marktiderman/gitdata rollup                              (writes the board)
 #   npx github:marktiderman/gitdata rollup --check                      (CI: has it drifted?)
+#   npx github:marktiderman/gitdata validate                            (CI: does every row hold up?)
 #
 # The github: spec, until the scoped package is actually published — @marktiderman/gitdata is
 # not on the registry yet, and instructions that 404 teach people to improvise. Never the bare

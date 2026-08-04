@@ -82,6 +82,6 @@ describe("pack quickstart, end to end", () => {
     // Re-init accounts for every file: nothing rewritten, nothing lost from the books.
     const r3 = run(["init", "--pack", "feature-management", "--root", root]);
     assert.equal(r3.status, 0);
-    assert.match(r3.stdout, /0 file\(s\) written, 4 left alone/);
+    assert.match(r3.stdout, /0 file\(s\) written, 5 left alone/);
   });
 });

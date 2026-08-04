@@ -54,7 +54,7 @@ data/
     _template.md      `_` prefix = never a row
     README.md         documents the table; never a row
   _views/             view specs and the artifacts they generate
-  _schema/            table contracts (reserved — see below)
+  _schema/            table contracts — required/unique/enum/pattern/ref, read by `gitdata validate`
 ```
 
 Column discovery is the union of frontmatter keys across a table's rows, so a table needs no
@@ -66,13 +66,22 @@ carries the row's path relative to its table, so two shards may hold same-named 
 date is how a table outgrows one directory — the loader used to read only the top level and drop
 those rows with no error, which is the failure this project exists to prevent.
 
-## Not built: `validate`
+## `validate`: sources are well-formed
 
-Nothing checks that a row has the fields its table expects, that an `id` is unique, that a
-`parent` resolves, or that a copied `_template.md` was filled in — an unedited template rolls up
-as real data. `data/_schema/` is reserved for this and read by nothing today.
+`data/_schema/<table>.schema.yml` declares a table's contract: `required` columns, `unique`
+columns, `enum` value sets, `pattern` regexes, and `ref` — a foreign-key-style check that a
+column's value names a real row in another table's column (`parent: features.id`). `gitdata
+validate` runs every declared schema against the same loaded model `rollup` projects into SQL,
+and exits non-zero — like `rollup --check` — naming the table, the row's file, the rule, and why.
 
-gitdata currently guarantees that **artifacts match sources**, not that **sources are well-formed**.
+Schema is opt-in, the same way a table needs no declaration to be queryable: a table with no
+schema file is not checked, and a repo with no `data/_schema/` passes with zero issues. The five
+rule names are the entire vocabulary the engine owns — which columns get which rules, for which
+tables, is domain knowledge and lives in the schema file (or ships inside a pack), never hardcoded
+into `src/validate.js`.
+
+gitdata now guarantees both that **artifacts match sources** (`rollup --check`) and, wherever a
+schema opts in, that **those sources are well-formed** (`validate`).
 
 ## Packs and versioning
 

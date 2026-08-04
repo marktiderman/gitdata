@@ -57,6 +57,7 @@ src/load.js              walk data/, folder → table, file → row
 src/project.js           rows → in-memory SQLite; registers collapse_ws(), md_section(), natural_key()
 src/render.js            {{name}} / {{name.column}} template substitution
 src/rollup.js            read views → compile → write or --check; the compile: escape hatch
+src/validate.js          read data/_schema/*.schema.yml → check loaded rows; required/unique/enum/pattern/ref
 src/shapes/              sections/digest/tree declarations → SQL (index.js dispatches, sql.js builds)
 src/init.js              scaffold data/ — bare, or from a pack
 src/cli.js               the CLI
