@@ -75,6 +75,27 @@ describe("load and symlinks", () => {
     }
   });
 
+  test("a directory symlink pointing back at an ancestor does not recurse forever", () => {
+    // statSync follows links, so a directory symlink now classifies as a directory too — a
+    // self-referencing one (`data/things/self -> data/things`) would otherwise recurse until
+    // the call stack overflows. A dangling link is caught above; a resolvable cycle needs its
+    // own guard, tracking each directory's real path so a repeat is skipped, not descended into.
+    const r = repo("gitdata-symlink-cycle-");
+    try {
+      r.write("data/things/T-001--real.md", "---\nid: T-001\n---\nReal.\n");
+      symlinkSync(join(r.root, "data", "things"), join(r.root, "data", "things", "self"), "dir");
+
+      const tables = load(join(r.root, "data"));
+      assert.deepEqual([...tables.keys()], ["things"]);
+      assert.deepEqual(
+        tables.get("things").rows.map((row) => row.id),
+        ["T-001"],
+      );
+    } finally {
+      r.rm();
+    }
+  });
+
   test("a dangling symlink fails loud with the path, not a raw ENOENT", () => {
     const r = repo("gitdata-dangling-");
     try {

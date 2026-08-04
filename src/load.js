@@ -15,7 +15,7 @@
  * Rows are sorted by their path relative to the table so a compile never depends on directory
  * order — that determinism is what makes byte-identical drift checking possible.
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter } from "./frontmatter.js";
@@ -40,14 +40,20 @@ function statOf(dir, name, rel) {
 }
 
 /** Row-file paths under `dir`, relative to it, depth-first and sorted. */
-function rowPaths(dir, prefix = "") {
+function rowPaths(dir, prefix = "", seen = new Set([realpathSync(dir)])) {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.name.startsWith("_") || entry.name.startsWith(".")) continue;
     const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
     const stat = statOf(dir, entry.name, rel);
-    if (stat.isDirectory()) out.push(...rowPaths(join(dir, entry.name), rel));
-    else if (isRowFile(entry.name)) out.push(rel);
+    if (stat.isDirectory()) {
+      // A symlink pointing at an ancestor would otherwise recurse until the stack overflows.
+      const real = realpathSync(join(dir, entry.name));
+      if (seen.has(real)) continue;
+      out.push(...rowPaths(join(dir, entry.name), rel, new Set([...seen, real])));
+    } else if (isRowFile(entry.name)) {
+      out.push(rel);
+    }
   }
   return out.sort();
 }

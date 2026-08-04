@@ -29,7 +29,7 @@ installs:
 #   npx github:marktiderman/gitdata rollup --check                      (CI: has it drifted?)
 #   npx github:marktiderman/gitdata validate                            (CI: does every row hold up?)
 #
-# The github: spec, until the scoped package is actually published — @marktiderman/gitdata is
+# Use the github: spec until the scoped package is actually published — @marktiderman/gitdata is
 # not on the registry yet, and instructions that 404 teach people to improvise. Never the bare
 # name: unscoped `gitdata` on npm is an unrelated 2016 package by another author — the bare
 # command fetches and runs a stranger's code, in a pack, on somebody else's machine, on our

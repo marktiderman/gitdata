@@ -63,8 +63,14 @@ export function loadViewSpecs(dataRoot) {
       const spec = parseYaml(readFileSync(join(dir, file), "utf8"));
       for (const field of ["id", "out"]) {
         if (!spec?.[field]) throw new ViewSpecError(`${file}: missing required field "${field}"`);
+        if (typeof spec[field] !== "string") {
+          throw new ViewSpecError(`${file}: "${field}" must be a string, got ${typeof spec[field]}`);
+        }
       }
       if (spec.compile) {
+        if (typeof spec.compile !== "string") {
+          throw new ViewSpecError(`${file}: "compile" must be a module path string, got ${typeof spec.compile}`);
+        }
         if (spec.queries || spec.template) {
           throw new ViewSpecError(`${file}: "compile" replaces "queries"/"template" — declare one or the other`);
         }
@@ -146,8 +152,26 @@ export async function compileView(db, spec) {
  * @returns {Array<{type: "context"|"add"|"remove", line: string}>}
  */
 export function diffLines(oldText, newText) {
-  const a = oldText == null ? [] : oldText.split("\n");
-  const b = newText == null ? [] : newText.split("\n");
+  const aAll = oldText == null ? [] : oldText.split("\n");
+  const bAll = newText == null ? [] : newText.split("\n");
+
+  // The LCS table below costs 4*(n+1)*(m+1) bytes — two 20,000-line sides would be over a
+  // gigabyte. Identical head and tail lines need no LCS at all, so trim them first; real drift
+  // touches few lines, so this shrinks the table to the actual changed window. Deterministic —
+  // the trim depends only on the two inputs, not on iteration order.
+  let head = 0;
+  while (head < aAll.length && head < bAll.length && aAll[head] === bAll[head]) head++;
+  let tail = 0;
+  while (
+    tail < aAll.length - head &&
+    tail < bAll.length - head &&
+    aAll[aAll.length - 1 - tail] === bAll[bAll.length - 1 - tail]
+  ) {
+    tail++;
+  }
+
+  const a = aAll.slice(head, aAll.length - tail);
+  const b = bAll.slice(head, bAll.length - tail);
   const n = a.length;
   const m = b.length;
 
@@ -177,7 +201,12 @@ export function diffLines(oldText, newText) {
   }
   while (i < n) entries.push({ type: "remove", line: a[i++] });
   while (j < m) entries.push({ type: "add", line: b[j++] });
-  return entries;
+
+  return [
+    ...aAll.slice(0, head).map((line) => ({ type: "context", line })),
+    ...entries,
+    ...aAll.slice(aAll.length - tail).map((line) => ({ type: "context", line })),
+  ];
 }
 
 /** Render `diffLines()` output as unified-diff-style text: ` ` context, `-` removed, `+` added. */

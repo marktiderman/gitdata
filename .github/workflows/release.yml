@@ -30,7 +30,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write # REQUIRED for OIDC Trusted Publishing (and provenance)
 
 concurrency:
   group: release-${{ github.ref }}
@@ -41,8 +40,12 @@ jobs:
     name: publish to npm
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # REQUIRED for OIDC Trusted Publishing (and provenance) — scoped to this job
+                       # only, so a future job added to this workflow does not inherit OIDC write.
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
 
@@ -51,12 +54,14 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org # writes the .npmrc npm publish reads
 
-      # OIDC Trusted Publishing needs npm >= 11.5.1; Node 22 bundles 10.x. Pinned to ^11.6.0
-      # rather than `latest`: the 11.5.x tarballs shipped an arborist missing `promise-retry`
-      # (MODULE_NOT_FOUND on any install), and the caret keeps us inside 11.x.
+      # OIDC Trusted Publishing needs npm >= 11.5.1; Node 22 bundles 10.x. Pinned to an exact
+      # reviewed version rather than a caret range or `latest`: the 11.5.x tarballs shipped an
+      # arborist missing `promise-retry` (MODULE_NOT_FOUND on any install), and an exact pin
+      # means Dependabot proposes the next bump as a reviewable diff instead of it landing
+      # silently on the next release run.
       - name: Ensure npm supports OIDC Trusted Publishing
         run: |
-          npm install -g npm@^11.6.0
+          npm install -g npm@11.6.0
           npm --version
 
       - name: Install
