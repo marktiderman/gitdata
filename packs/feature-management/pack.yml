@@ -29,9 +29,11 @@ installs:
 #   npx @marktiderman/gitdata rollup --check                            (CI: has it drifted?)
 #   npx @marktiderman/gitdata validate                                  (CI: does every row hold up?)
 #
-# Always the SCOPED name. @marktiderman/gitdata is on the registry as of v0.1.0, so the scoped
-# form resolves — pin it (`@marktiderman/gitdata@0.1.0`) in CI, where a floating version means a
-# drift check that can change under you. Never the bare name: unscoped `gitdata` on npm is an
+# Always the SCOPED name — @marktiderman/gitdata is on the registry, so the scoped form resolves.
+# The two CI lines above are unpinned for readability; in a real workflow pin the version you
+# tested against (or add it as a devDependency so the lockfile pins it), because `--check`
+# compares bytes and a floating engine can turn a build red with no change in your own repo.
+# Never the bare name: unscoped `gitdata` on npm is an
 # unrelated 2016 package by another author — the bare command fetches and runs a stranger's code,
 # in a pack, on somebody else's machine, on our instruction. test/boundaries.test.js keeps this
 # from coming back.
