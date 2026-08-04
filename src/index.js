@@ -10,8 +10,9 @@
  * change without a major version.
  */
 
-// Regenerate views, or report drift without writing.
-export { rollup, loadViewSpecs, compileView, ViewSpecError } from "./rollup.js";
+// Regenerate views, or report drift without writing. diffLines/formatDiff turn a --check drift
+// pair (compiled vs. committed) into something readable instead of just a status string.
+export { rollup, loadViewSpecs, compileView, diffLines, formatDiff, ViewSpecError } from "./rollup.js";
 
 // Scaffold a `data/` trellis — bare, or from a pack.
 export { init, listPacks, PackError } from "./init.js";

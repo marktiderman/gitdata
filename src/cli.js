@@ -10,20 +10,33 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { init, listPacks } from "./init.js";
-import { rollup } from "./rollup.js";
+import { diffLines, formatDiff, rollup } from "./rollup.js";
 
 const USAGE = `gitdata — docs as data in git
 
-  gitdata init [--pack <name>] [--root <dir>]  scaffold data/ — bare, or from a pack
-  gitdata rollup [--check] [--root <dir>]      regenerate views | report drift without writing
-  gitdata packs                                list available packs
+  gitdata init [--pack <name>] [--root <dir>]           scaffold data/ — bare, or from a pack
+  gitdata rollup [--check] [--diff] [--json] [--root <dir>]
+                                                          regenerate views | report drift without writing
+  gitdata packs                                          list available packs
 
 Options:
   --root <dir>   repo root (default: cwd). Data lives in <root>/data.
+  --check        report drift without writing; exits non-zero if anything drifted or is missing.
+  --diff         with --check: print the line diff for each drifted/missing view. No effect
+                 without --check; a normal rollup writes, it does not compare.
+  --json         with --check: emit a structured drift report on stdout instead of the plain-text
+                 listing. No effect without --check. Combine with --diff to include diff content.
 `;
 
 function parseArgs(argv) {
-  const args = { command: argv[0], check: argv.includes("--check"), root: process.cwd(), pack: null };
+  const args = {
+    command: argv[0],
+    check: argv.includes("--check"),
+    diff: argv.includes("--diff"),
+    json: argv.includes("--json"),
+    root: process.cwd(),
+    pack: null,
+  };
   for (const [flag, key] of [["--root", "root"], ["--pack", "pack"]]) {
     const i = argv.indexOf(flag);
     if (i === -1) continue;
@@ -66,8 +79,42 @@ function cmdInit({ root, pack }) {
   return 0;
 }
 
-async function cmdRollup({ root, check }) {
+const isBad = (r) => r.status === "drifted" || r.status === "missing";
+
+/**
+ * The structured counterpart to the plain-text listing — `--check --json`'s report. `--check`
+ * already computes both sides of the comparison per view (`compiled`, `committed`); this is what
+ * surfaces that instead of collapsing it to a status string, so a caller can consume drift without
+ * scraping stdout. Diff content rides along only when `--diff` is also given, and only for views
+ * that are not clean — an unchanged view has nothing to show.
+ */
+function jsonReport(results, { diff }) {
+  const views = results.map((r) => {
+    const view = { id: r.id, out: r.out, status: r.status };
+    if (diff && isBad(r)) view.diff = diffLines(r.committed, r.compiled);
+    return view;
+  });
+  return {
+    views,
+    summary: {
+      total: results.length,
+      unchanged: results.filter((r) => r.status === "unchanged").length,
+      drifted: results.filter((r) => r.status === "drifted").length,
+      missing: results.filter((r) => r.status === "missing").length,
+    },
+  };
+}
+
+async function cmdRollup({ root, check, diff, json }) {
   const results = await rollup({ dataRoot: resolve(root, "data"), repoRoot: root, check });
+
+  // Both flags are check-mode reporting detail, not part of what a writing rollup does — they
+  // are simply inert without --check rather than an error, matching how --check itself already
+  // reads as a no-op modifier on top of the base command.
+  if (check && json) {
+    console.log(JSON.stringify(jsonReport(results, { diff }), null, 2));
+    return results.some(isBad) ? 1 : 0;
+  }
 
   if (results.length === 0) {
     console.log("  no views found — add data/_views/<name>.view.yml");
@@ -77,9 +124,14 @@ async function cmdRollup({ root, check }) {
   for (const r of results) {
     const mark = { written: "✎", unchanged: "·", drifted: "✗", missing: "✗" }[r.status];
     console.log(`  ${mark} ${r.id.padEnd(24)} ${r.status.padEnd(10)} ${r.out}`);
+    if (check && diff && isBad(r)) {
+      for (const line of formatDiff(diffLines(r.committed, r.compiled)).split("\n")) {
+        console.log(`      ${line}`);
+      }
+    }
   }
 
-  const bad = results.filter((r) => r.status === "drifted" || r.status === "missing");
+  const bad = results.filter(isBad);
   if (check && bad.length > 0) {
     console.log(`\n  ${bad.length} view(s) out of date — run \`gitdata rollup\` and commit the result.`);
     return 1;

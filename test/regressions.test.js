@@ -5,17 +5,22 @@
  * Self-contained like engine.test.js — fixture repos in temp dirs, no other checkout required.
  */
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
 
 import { parseFrontmatter, FrontmatterError } from "../src/frontmatter.js";
 import { load, LoadError } from "../src/load.js";
 import { project, query, ProjectError } from "../src/project.js";
 import { renderTemplate, RenderError } from "../src/render.js";
-import { loadViewSpecs, rollup, ViewSpecError } from "../src/rollup.js";
+import { diffLines, formatDiff, loadViewSpecs, rollup, ViewSpecError } from "../src/rollup.js";
 import { orderBy } from "../src/shapes/sql.js";
+
+const CLI = fileURLToPath(new URL("../src/cli.js", import.meta.url));
+const runCli = (args) => spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8" });
 
 /** A throwaway fixture repo. Returns { root, write, rm }. */
 function repo(prefix) {
@@ -284,6 +289,134 @@ describe("compile: escape hatch", () => {
       r.write("data/_views/v.view.yml", "id: v\nout: data/_views/v.md\ncompile: ./v.compile.js\n");
       r.write("data/_views/v.compile.js", "export default () => 42;\n");
       await assert.rejects(rollup({ dataRoot: join(r.root, "data"), repoRoot: r.root }), /must return a string/);
+    } finally {
+      r.rm();
+    }
+  });
+});
+
+describe("--check --diff / --json surface the drift instead of discarding it", () => {
+  const VIEW = (out) =>
+    `id: v\nout: ${out}\nqueries:\n  q: SELECT 1 AS n\ntemplate: "line {{q.n}}"\n`;
+
+  test("diffLines/formatDiff render context, remove, and add lines from a plain two-sided compare", () => {
+    // The unit underneath both flags: given the two strings `--check` already computes (compiled,
+    // committed), the diff is not thrown away — it comes back as entries a caller can format or
+    // serialize.
+    const before = "keep\nremove me\nchange me\n";
+    const after = "keep\nchange me too\nadd me\n";
+    assert.deepEqual(diffLines(before, after), [
+      { type: "context", line: "keep" },
+      { type: "remove", line: "remove me" },
+      { type: "remove", line: "change me" },
+      { type: "add", line: "change me too" },
+      { type: "add", line: "add me" },
+      { type: "context", line: "" }, // the trailing "\n" on both sides is a shared empty line
+    ]);
+    assert.equal(
+      formatDiff(diffLines(before, after)),
+      [" keep", "-remove me", "-change me", "+change me too", "+add me", " "].join("\n"),
+    );
+  });
+
+  test("`rollup --check --diff` prints the actual diff for a drifted view, not just its status", () => {
+    const r = repo("gitdata-diff-drift-");
+    try {
+      r.write("data/things/T-001.md", "---\nid: T-001\n---\nBody.\n");
+      r.write("data/_views/v.view.yml", VIEW("data/_views/v.md"));
+      r.write("data/_views/v.md", "line 9"); // hand-edited — the fresh render is "line 1"
+
+      const withoutDiff = runCli(["rollup", "--check", "--root", r.root]);
+      assert.equal(withoutDiff.status, 1);
+      assert.match(withoutDiff.stdout, /drifted/);
+      assert.ok(!withoutDiff.stdout.includes("line 9"), "plain --check still leaked diff content");
+
+      const withDiff = runCli(["rollup", "--check", "--diff", "--root", r.root]);
+      assert.equal(withDiff.status, 1, "exit code must stay the same with --diff added");
+      assert.match(withDiff.stdout, /drifted/);
+      assert.match(withDiff.stdout, /-line 9/);
+      assert.match(withDiff.stdout, /\+line 1/);
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("`rollup --check --json` reports a missing view's shape, diff included only with --diff", () => {
+    const r = repo("gitdata-json-missing-");
+    try {
+      r.write("data/things/T-001.md", "---\nid: T-001\n---\nBody.\n");
+      r.write("data/_views/v.view.yml", VIEW("data/_views/v.md"));
+
+      const plain = runCli(["rollup", "--check", "--json", "--root", r.root]);
+      assert.equal(plain.status, 1);
+      const plainReport = JSON.parse(plain.stdout);
+      assert.deepEqual(plainReport.summary, { total: 1, unchanged: 0, drifted: 0, missing: 1 });
+      assert.equal(plainReport.views.length, 1);
+      assert.equal(plainReport.views[0].id, "v");
+      assert.equal(plainReport.views[0].status, "missing");
+      assert.equal(plainReport.views[0].diff, undefined, "--json alone must not include diff content");
+
+      const withDiff = runCli(["rollup", "--check", "--json", "--diff", "--root", r.root]);
+      assert.equal(withDiff.status, 1);
+      const report = JSON.parse(withDiff.stdout);
+      // Nothing on disk yet — every rendered line reads as an addition.
+      assert.deepEqual(report.views[0].diff, [{ type: "add", line: "line 1" }]);
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("`rollup --check --json` on a clean repo reports every view unchanged with an empty diff list", () => {
+    const r = repo("gitdata-json-clean-");
+    try {
+      r.write("data/things/T-001.md", "---\nid: T-001\n---\nBody.\n");
+      r.write("data/_views/v.view.yml", VIEW("data/_views/v.md"));
+
+      assert.equal(runCli(["rollup", "--root", r.root]).status, 0);
+
+      const result = runCli(["rollup", "--check", "--json", "--diff", "--root", r.root]);
+      assert.equal(result.status, 0);
+      const report = JSON.parse(result.stdout);
+      assert.deepEqual(report.summary, { total: 1, unchanged: 1, drifted: 0, missing: 0 });
+      assert.equal(report.views.length, 1);
+      assert.equal(report.views[0].status, "unchanged");
+      assert.equal(report.views[0].diff, undefined, "a clean view carries no diff — nothing changed");
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("--diff and --json are inert without --check — a writing rollup is unaffected", () => {
+    const r = repo("gitdata-diff-noop-");
+    try {
+      r.write("data/things/T-001.md", "---\nid: T-001\n---\nBody.\n");
+      r.write("data/_views/v.view.yml", VIEW("data/_views/v.md"));
+
+      const result = runCli(["rollup", "--diff", "--json", "--root", r.root]);
+      assert.equal(result.status, 0);
+      assert.match(result.stdout, /rolled up/);
+      assert.ok(!result.stdout.trim().startsWith("{"), "writing mode must not emit the JSON report");
+      assert.equal(readFileSync(join(r.root, "data/_views/v.md"), "utf8"), "line 1");
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("existing --check exit-code contract is unchanged: 0 clean, 1 drifted, 1 missing", () => {
+    // Pinning the contract the new flags must not disturb — same fixture shape as the "check
+    // reports 'missing'" test above, walked through all three states.
+    const r = repo("gitdata-check-contract-");
+    try {
+      r.write("data/things/T-001.md", "---\nid: T-001\n---\nBody.\n");
+      r.write("data/_views/v.view.yml", VIEW("data/_views/v.md"));
+
+      assert.equal(runCli(["rollup", "--check", "--root", r.root]).status, 1); // missing
+
+      assert.equal(runCli(["rollup", "--root", r.root]).status, 0);
+      assert.equal(runCli(["rollup", "--check", "--root", r.root]).status, 0); // clean
+
+      writeFileSync(join(r.root, "data/_views/v.md"), "line 1\nvandalism\n");
+      assert.equal(runCli(["rollup", "--check", "--root", r.root]).status, 1); // drifted
     } finally {
       r.rm();
     }

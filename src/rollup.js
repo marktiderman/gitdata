@@ -131,6 +131,62 @@ export async function compileView(db, spec) {
 }
 
 /**
+ * Line-based diff between two texts, via a classic O(n·m) LCS. `--check` already computes both
+ * sides of the comparison (see `rollup()` below) — this is what turns that pair into something a
+ * human or a machine can read instead of the boolean the drift check used to report and discard.
+ *
+ * Dependency-free by design: no diff library is a project dependency, and adding one for this is
+ * unjustified when a direct implementation handles the file sizes rollup renders (rendered docs,
+ * not arbitrary blobs). `null` (the "missing" status's committed side) is treated as an empty
+ * file, so a missing artifact's diff reads as every line added.
+ *
+ * Deterministic by construction (law 4): the same two strings always produce the same entries —
+ * nothing here depends on iteration order, time, or randomness.
+ *
+ * @returns {Array<{type: "context"|"add"|"remove", line: string}>}
+ */
+export function diffLines(oldText, newText) {
+  const a = oldText == null ? [] : oldText.split("\n");
+  const b = newText == null ? [] : newText.split("\n");
+  const n = a.length;
+  const m = b.length;
+
+  // lcs[i][j] = length of the LCS of a[i:] and b[j:].
+  const lcs = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+
+  const entries = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      entries.push({ type: "context", line: a[i] });
+      i++;
+      j++;
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+      entries.push({ type: "remove", line: a[i] });
+      i++;
+    } else {
+      entries.push({ type: "add", line: b[j] });
+      j++;
+    }
+  }
+  while (i < n) entries.push({ type: "remove", line: a[i++] });
+  while (j < m) entries.push({ type: "add", line: b[j++] });
+  return entries;
+}
+
+/** Render `diffLines()` output as unified-diff-style text: ` ` context, `-` removed, `+` added. */
+export function formatDiff(entries) {
+  const prefix = { context: " ", add: "+", remove: "-" };
+  return entries.map((e) => `${prefix[e.type]}${e.line}`).join("\n");
+}
+
+/**
  * @param {{dataRoot: string, repoRoot: string, check?: boolean}} opts
  * @returns {Promise<Array<{id: string, out: string, status: "written"|"unchanged"|"drifted"|"missing"}>>}
  */
