@@ -3,13 +3,13 @@
  * be testable without any consumer repo checked out next to it.
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, symlinkSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 
 import { parseFrontmatter, FrontmatterError } from "../src/frontmatter.js";
-import { isRowFile, load, rowFilesIn } from "../src/load.js";
+import { escapedRowFiles, isRowFile, load, rowFilesIn } from "../src/load.js";
 import { project, query } from "../src/project.js";
 import { renderTemplate, RenderError } from "../src/render.js";
 import { rollup } from "../src/rollup.js";
@@ -91,6 +91,61 @@ describe("load", () => {
         ["a.md"],
         "loader and predicate must answer identically",
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("escapedRowFiles names the rows that do not live under the table", () => {
+    // A rewriter deletes every path rowFilesIn reports. Through a symlinked shard that reaches
+    // outside the table, and can reach outside the repo. rowFilesIn must keep reporting them --
+    // the loader reads them, so omitting them would make the enumerator disagree with the loader
+    // again -- so the fact is published alongside instead, and the consumer rules on it.
+    const dir = mkdtempSync(join(tmpdir(), "gitdata-escape-"));
+    const put = (rel, text) => {
+      mkdirSync(join(dir, rel, ".."), { recursive: true });
+      writeFileSync(join(dir, rel), text, "utf8");
+    };
+    put("data/things/here.md", "---\nid: A\n---\nInside.\n");
+    put("elsewhere/gone.md", "---\nid: B\n---\nOutside the table.\n");
+    symlinkSync(join(dir, "elsewhere"), join(dir, "data/things/shard"));
+
+    try {
+      const table = join(dir, "data/things");
+      assert.deepEqual(
+        rowFilesIn(table),
+        ["here.md", "shard/gone.md"],
+        "the escaping row is still a row: the loader reads it, so the enumerator reports it",
+      );
+      assert.deepEqual(
+        load(join(dir, "data")).get("things").rows.map((r) => r._file),
+        ["here.md", "shard/gone.md"],
+        "loader and enumerator still agree -- containment is a separate question",
+      );
+      assert.deepEqual(
+        escapedRowFiles(table),
+        ["shard/gone.md"],
+        "and exactly the escaping one is named",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("escapedRowFiles is empty for an ordinary table, nested or flat", () => {
+    // The common case must cost the caller nothing to check, or nobody will check it.
+    const dir = mkdtempSync(join(tmpdir(), "gitdata-contained-"));
+    const put = (rel, text) => {
+      mkdirSync(join(dir, rel, ".."), { recursive: true });
+      writeFileSync(join(dir, rel), text, "utf8");
+    };
+    put("data/things/flat.md", "---\nid: A\n---\n");
+    put("data/things/2026/01/nested.md", "---\nid: B\n---\n");
+
+    try {
+      const table = join(dir, "data/things");
+      assert.deepEqual(rowFilesIn(table), ["2026/01/nested.md", "flat.md"]);
+      assert.deepEqual(escapedRowFiles(table), [], "a nested shard on disk is not an escape");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

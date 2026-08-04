@@ -16,7 +16,7 @@
  * order — that determinism is what makes byte-identical drift checking possible.
  */
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import { parseFrontmatter } from "./frontmatter.js";
 
@@ -89,6 +89,46 @@ function rowPaths(dir, prefix = "", seen = new Set([realpathSync(dir)])) {
  */
 export function rowFilesIn(dir) {
   return rowPaths(dir);
+}
+
+/**
+ * The rows of `dir` that do not physically live under it — the subset a DESTRUCTIVE consumer has
+ * to decide about.
+ *
+ * Following a symlinked shard is deliberate: a Dirent for a symlink reports neither file nor
+ * directory, and honouring that dropped every row behind one. So `rowFilesIn` returns them, and
+ * must, or it would stop answering the same question the loader answers.
+ *
+ * Reading them is safe. DELETING them is not necessarily: a consumer rewriting a machine-owned
+ * table wholesale removes every path `rowFilesIn` reports, and through a link that reaches outside
+ * the table — at worst outside the repo. The two callers want opposite things from the same list,
+ * so the list stays honest and the fact is published beside it.
+ *
+ * Policy is deliberately NOT decided here. gitdata owns the mechanics; the consumer owns the
+ * naming, and the ruling. A rewriter can refuse the table, skip these paths, or delete them
+ * knowingly — but it can no longer do so unknowingly, which is the only outcome this rules out.
+ * Silently filtering them from `rowFilesIn` would be worse than either: rows the loader reads
+ * would vanish from the list that claims to enumerate them, which is precisely the asymmetry
+ * exporting this contract exists to end.
+ *
+ * An unresolvable path counts as escaping. A consumer's safe move on "I cannot tell" is the same
+ * as on "it is outside": do not delete it.
+ *
+ * @returns {string[]} paths relative to `dir`, a subset of `rowFilesIn(dir)`; empty in the
+ *   ordinary case where a table is a plain directory.
+ */
+export function escapedRowFiles(dir) {
+  const root = realpathSync(dir);
+  const inside = root.endsWith(sep) ? root : root + sep;
+  return rowPaths(dir).filter((rel) => {
+    let real;
+    try {
+      real = realpathSync(join(dir, rel));
+    } catch {
+      return true;
+    }
+    return !real.startsWith(inside);
+  });
 }
 
 /** @returns {Map<string, {name: string, rows: Array<{_file: string, _body: string}>}>} */
