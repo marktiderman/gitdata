@@ -15,6 +15,7 @@ import { after, before, describe, test } from "node:test";
 import { codeownersLines, emitCodeowners, EmitError, renderCodeowners } from "../src/emit-codeowners.js";
 import { parseFrontmatter, FrontmatterError } from "../src/frontmatter.js";
 import { init } from "../src/init.js";
+import { assertReadOnly, describeTables, runQuery, QueryError } from "../src/introspect.js";
 import { load, LoadError } from "../src/load.js";
 import { project, query, ProjectError } from "../src/project.js";
 import { renderTemplate, RenderError } from "../src/render.js";
