@@ -24,9 +24,11 @@ installs:
 
 # After install:
 #   cp data/features/_template.md data/features/F-001--my-feature.md   (then edit it)
-#   npx @marktiderman/gitdata rollup                                    (writes the board)
-#   npx @marktiderman/gitdata rollup --check                            (CI: has it drifted?)
+#   npx github:marktiderman/gitdata rollup                              (writes the board)
+#   npx github:marktiderman/gitdata rollup --check                      (CI: has it drifted?)
 #
-# Always the scoped name. Unscoped, `gitdata` on npm is an unrelated 2016 package by another
-# author — so the bare command fetches and runs a stranger's code, in a pack, on somebody
-# else's machine, on our instruction. test/boundaries.test.js keeps this from coming back.
+# The github: spec, until the scoped package is actually published — @marktiderman/gitdata is
+# not on the registry yet, and instructions that 404 teach people to improvise. Never the bare
+# name: unscoped `gitdata` on npm is an unrelated 2016 package by another author — the bare
+# command fetches and runs a stranger's code, in a pack, on somebody else's machine, on our
+# instruction. test/boundaries.test.js keeps this from coming back.

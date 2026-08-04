@@ -88,8 +88,8 @@ declaration (see [SHAPES.md](SHAPES.md)) or a raw SQL string, shown here:
 
 ```yaml
 kind: view-spec
-id: features-board
-out: data/_views/features-board.md
+id: p0-board
+out: data/_views/p0-board.md
 queries:
   rows: |
     SELECT '| ' || id || ' | ' || title || ' |' AS line
@@ -128,7 +128,10 @@ data means.
 ## Status
 
 `init` and `rollup` are built. `validate` is not: nothing checks a row against a schema, so a table
-accepts any frontmatter and an unedited template rolls up as real data.
+accepts any frontmatter and an unedited template rolls up as real data. Emitting GitHub
+configuration (CODEOWNERS stanzas, required-check wiring) is also not built yet — that half of the
+law is direction, not capability. Until it exists, wire enforcement by hand: a CODEOWNERS pattern
+per `data/<table>/**`, branch protection requiring a `gitdata rollup --check` job.
 
 Layers, rules, and the gap: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

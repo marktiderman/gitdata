@@ -52,13 +52,20 @@ question resolves against this line:
 ## Layout
 
 ```
-src/frontmatter.js   parse ---frontmatter--- + body
-src/load.js          walk data/, folder → table, file → row
-src/project.js       rows → in-memory SQLite; registers collapse_ws()
-src/render.js        {{name}} / {{name.column}} template substitution
-src/rollup.js        read views → compile → write or --check
-src/cli.js           the CLI
-test/engine.test.js  self-contained fixture repo in a temp dir
+src/frontmatter.js       parse ---frontmatter--- + body
+src/load.js              walk data/, folder → table, file → row
+src/project.js           rows → in-memory SQLite; registers collapse_ws(), md_section(), natural_key()
+src/render.js            {{name}} / {{name.column}} template substitution
+src/rollup.js            read views → compile → write or --check; the compile: escape hatch
+src/shapes/              sections/digest/tree declarations → SQL (index.js dispatches, sql.js builds)
+src/init.js              scaffold data/ — bare, or from a pack
+src/cli.js               the CLI
+src/index.js             the programmatic API — what the package exports is the contract
+test/engine.test.js      self-contained fixture repo in a temp dir
+test/regressions.test.js pinned defects — each test names the failure it prevents
+test/cli.test.js         spawned-process CLI contract + the pack quickstart end to end
+test/shapes.test.js      shape declarations → expected lines
+test/boundaries.test.js  guards the laws above (manifest, exports, forbidden names)
 ```
 
 ## Testing
