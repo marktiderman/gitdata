@@ -25,6 +25,10 @@ export { emitCodeowners, codeownersLines, renderCodeowners, EmitError } from "./
 
 // The pipeline, for consumers building their own tooling on top: markdown → tables → SQLite.
 export { load, LoadError } from "./load.js";
+// The row contract, for consumers that write into `data/` rather than only read it: which files
+// are rows, and where they are. Without these a consumer reimplements them, and a reimplementation
+// that disagrees with the loader is a silent data loss on one side or a phantom row on the other.
+export { isRowFile, rowFilesIn } from "./load.js";
 export { project, query, ProjectError } from "./project.js";
 export { parseFrontmatter, FrontmatterError } from "./frontmatter.js";
 export { renderTemplate, RenderError } from "./render.js";

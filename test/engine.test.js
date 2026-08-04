@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 
 import { parseFrontmatter, FrontmatterError } from "../src/frontmatter.js";
-import { load } from "../src/load.js";
+import { isRowFile, load, rowFilesIn } from "../src/load.js";
 import { project, query } from "../src/project.js";
 import { renderTemplate, RenderError } from "../src/render.js";
 import { rollup } from "../src/rollup.js";
@@ -55,6 +55,18 @@ describe("load", () => {
     assert.equal(tables.get("empty").rows.length, 0);
   });
 
+  test("isRowFile answers the same question the loader asks, for a consumer that writes rows", () => {
+    // Pinned as behaviour because it is now published API: a consumer deletes and rewrites rows by
+    // this predicate, so widening or narrowing it is a change to somebody else's data, not a
+    // refactor. Each clause below is a file somebody has actually lost or duplicated.
+    assert.ok(isRowFile("GEN-001--alpha.md"));
+    assert.ok(!isRowFile("_template.md"), "`_` is the reservation for non-rows");
+    assert.ok(!isRowFile("README.md"), "a table documents itself without becoming a row");
+    assert.ok(!isRowFile("ReadMe.md"), "case-insensitively — the loader's docstring says so");
+    assert.ok(!isRowFile("notes.txt"), "the format does not move: rows are markdown");
+    assert.ok(!isRowFile("row.md.bak"), "an editor backup is not a row");
+  });
+
   test("a sharded table keeps its nested rows, and does not become a table per shard", () => {
     // Reading only the top level dropped every sharded row with no error and no count. Sharding
     // by date is the ordinary way a table outgrows one directory, so the loss was silent and
@@ -83,6 +95,14 @@ describe("load", () => {
         "2026/02/S-003--feb.md",
         "S-001--flat.md",
       ]);
+      // The exported walk is the one the loader uses, so a consumer enumerating a table for itself
+      // cannot reach a different answer than the one that got loaded. A flat `readdirSync` here
+      // returns one file out of three and calls the table complete.
+      assert.deepEqual(
+        rowFilesIn(join(shard, "data", "sessions")),
+        rows.map((r) => r._file),
+        "rowFilesIn disagreed with what load() read",
+      );
     } finally {
       rmSync(shard, { recursive: true, force: true });
     }

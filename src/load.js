@@ -22,7 +22,16 @@ import { parseFrontmatter } from "./frontmatter.js";
 
 export class LoadError extends Error {}
 
-const isRowFile = (name) =>
+/**
+ * What counts as a row. Exported because it is a contract, not a detail.
+ *
+ * A consumer that writes into `data/` has to answer the same question this loader answers, and
+ * with nothing to import it answers it by copying these three clauses. The copy is then free to
+ * drift, and drift here is not symmetric: a consumer that deletes rows by its own copy of the rule
+ * either deletes a file the loader protects, or leaves behind one the loader reads. Both are
+ * silent, and both are the failure this project exists to prevent — one repo away.
+ */
+export const isRowFile = (name) =>
   name.endsWith(".md") && !name.startsWith("_") && name.toLowerCase() !== "readme.md";
 
 /**
@@ -56,6 +65,21 @@ function rowPaths(dir, prefix = "", seen = new Set([realpathSync(dir)])) {
     }
   }
   return out.sort();
+}
+
+/**
+ * Every row file under a table directory, relative to it, in load order — shards included.
+ *
+ * `isRowFile` alone is only half the contract. The other half is that a table may nest, so a
+ * consumer holding the predicate still reaches for `readdirSync` and gets a flat list: on a
+ * sharded table it finds none of the rows the loader loads, and any wholesale rewrite built on it
+ * leaves the shards behind while reporting the table replaced. Handing out the same walk removes
+ * the second place that has to be got right.
+ *
+ * @returns {string[]}
+ */
+export function rowFilesIn(dir) {
+  return rowPaths(dir);
 }
 
 /** @returns {Map<string, {name: string, rows: Array<{_file: string, _body: string}>}>} */
