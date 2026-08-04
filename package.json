@@ -1,10 +1,10 @@
 {
   "name": "@marktiderman/gitdata",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": false,
   "type": "module",
   "sideEffects": false,
-  "description": "GitDATA \u2014 dependable, structured, organized docs as data in git that agents and owners can trust.",
+  "description": "GitDATA — dependable, structured, organized docs as data in git that agents and owners can trust.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/marktiderman/gitdata.git"
