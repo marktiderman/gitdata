@@ -15,7 +15,10 @@ concurrency:
 
 jobs:
   test:
-    name: test (Node 22)
+    # Deliberately version-agnostic: this string is the required status check in branch
+    # protection, so baking the Node version into it means every future bump silently blocks
+    # every PR on a check that no longer runs.
+    name: test
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -23,9 +26,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # Tested ABOVE the floor, on purpose. `engines` says >=22.12 (sqlite-wasm demands >=22;
+      # the .12 is where unflagged require(esm) landed, which the exports map needs for CJS
+      # consumers). Node 24 is LTS and inside that range, so testing here catches breakage on
+      # what people actually run, while release.yml stays on 22 — between them both ends of the
+      # supported range get exercised without a second billed job.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
 
       - run: npm ci
