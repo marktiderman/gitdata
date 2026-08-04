@@ -433,16 +433,6 @@ function write(rel, text) {
   writeFileSync(path, text, "utf8");
 }
 
-/** Run the CLI as a real subprocess, the way a consumer's CI actually invokes it. */
-function runCli(args) {
-  try {
-    const stdout = execFileSync(process.execPath, [CLI, ...args], { encoding: "utf8" });
-    return { status: 0, stdout };
-  } catch (err) {
-    return { status: err.status, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
-  }
-}
-
 before(() => {
   root = mkdtempSync(join(tmpdir(), "gitdata-validate-"));
 
