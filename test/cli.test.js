@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +42,48 @@ describe("cli conventions", () => {
   test("an unknown command prints usage and exits 1; bare invocation exits 0", () => {
     assert.equal(run(["frobnicate"]).status, 1);
     assert.equal(run([]).status, 0);
+  });
+});
+
+describe("emit codeowners", () => {
+  test("no _owners.yml → exit 0 and no file written; declared ownership → written, checked, drifted, missing", () => {
+    const root = mkdtempSync(join(tmpdir(), "gitdata-cli-codeowners-"));
+    try {
+      const dataDir = join(root, "data", "things");
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(join(dataDir, "T-001.md"), "---\nid: T-001\n---\nBody.\n");
+
+      // No ownership declared yet: exit 0, no CODEOWNERS written.
+      const empty = run(["emit", "codeowners", "--root", root]);
+      assert.equal(empty.status, 0, empty.stderr);
+      assert.match(empty.stdout, /no ownership declared/);
+      assert.ok(!existsSync(join(root, ".github/CODEOWNERS")));
+
+      // Declare ownership, write it.
+      writeFileSync(join(dataDir, "_owners.yml"), 'owners: ["@team"]\n');
+      const written = run(["emit", "codeowners", "--root", root]);
+      assert.equal(written.status, 0, written.stderr);
+      const codeowners = join(root, ".github/CODEOWNERS");
+      assert.ok(existsSync(codeowners));
+      assert.match(readFileSync(codeowners, "utf8"), /\/data\/things\/\*\* @team/);
+
+      // Clean → exit 0.
+      assert.equal(run(["emit", "codeowners", "--check", "--root", root]).status, 0);
+
+      // Hand-edited → drifted, exit 1.
+      writeFileSync(codeowners, readFileSync(codeowners, "utf8") + "\nvandalism\n");
+      const drift = run(["emit", "codeowners", "--check", "--root", root]);
+      assert.equal(drift.status, 1);
+      assert.match(drift.stdout, /drifted/);
+
+      // Deleted → missing, exit 1.
+      rmSync(codeowners);
+      const missing = run(["emit", "codeowners", "--check", "--root", root]);
+      assert.equal(missing.status, 1);
+      assert.match(missing.stdout, /missing/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

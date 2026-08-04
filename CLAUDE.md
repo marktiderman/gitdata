@@ -60,6 +60,7 @@ src/rollup.js            read views → compile → write or --check; the compil
 src/validate.js          read data/_schema/*.schema.yml → check loaded rows; required/unique/enum/pattern/ref
 src/shapes/              sections/digest/tree declarations → SQL (index.js dispatches, sql.js builds)
 src/init.js              scaffold data/ — bare, or from a pack
+src/emit-codeowners.js   data/<table>/_owners.yml → .github/CODEOWNERS; write or --check
 src/cli.js               the CLI
 src/index.js             the programmatic API — what the package exports is the contract
 test/engine.test.js      self-contained fixture repo in a temp dir
