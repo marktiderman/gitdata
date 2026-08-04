@@ -162,12 +162,16 @@ export async function compileView(db, spec, { emptyTables = new Set() } = {}) {
       // names its table structurally (`from:`), so when that table is empty this is not a guess
       // — say so and name the fix, instead of forwarding "no such column" to a stranger.
       //
-      // Gated on the underlying error actually being a missing-column/table failure, not just on
-      // the table being empty: a malformed shape spec (ShapeError, thrown before any SQL runs —
+      // Gated on the underlying error actually being a missing-column failure, not just on the
+      // table being empty: a malformed shape spec (ShapeError, thrown before any SQL runs —
       // "needs `line:`", "needs `blocks:` list") can equally reference an empty table, and that
-      // real cause must not be swallowed by a misleading "add a row" message.
-      const looksLikeMissingColumnOrTable = /no such (column|table)/i.test(cause.message);
-      const empty = looksLikeMissingColumnOrTable && q && typeof q === "object"
+      // real cause must not be swallowed by a misleading "add a row" message. "no such table" is
+      // deliberately excluded — project() creates a table for every loaded directory even with
+      // zero rows, so a genuine "no such table" always means a table that doesn't exist at all,
+      // never one that's merely empty; conflating the two could misattribute the error to an
+      // unrelated empty table a query happens to also reference.
+      const looksLikeMissingColumn = /no such column/i.test(cause.message);
+      const empty = looksLikeMissingColumn && q && typeof q === "object"
         ? [...shapeTables(q)].find((t) => emptyTables.has(t))
         : null;
       const message = empty

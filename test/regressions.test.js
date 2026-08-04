@@ -569,6 +569,42 @@ describe("issue #4 — a freshly-scaffolded empty table names the fix, not a raw
     }
   });
 
+  test("a query naming both an empty real table and a nonexistent table blames the nonexistent one, not the empty one", async () => {
+    // project() creates a table for every loaded directory even with zero rows — "no such table"
+    // can therefore never legitimately mean "merely empty", only "does not exist at all". A query
+    // touching both must not let the real, empty table it also references steal the blame.
+    const r = repo("gitdata-empty-plus-missing-table-");
+    try {
+      mkdirSync(join(r.root, "data/widgets"), { recursive: true }); // real, empty
+      r.write(
+        "data/_views/v.view.yml",
+        [
+          "id: v",
+          "out: data/_views/v.md",
+          "queries:",
+          "  stats:",
+          "    shape: digest",
+          "    counts:",
+          "      total: { from: widgets }",
+          "      other: { from: nonexistent }",
+          "    blocks:",
+          '      - text: "{total} / {other}"',
+          "template: '{{stats}}'",
+          "",
+        ].join("\n"),
+      );
+      await assert.rejects(rollup({ dataRoot: join(r.root, "data"), repoRoot: r.root }), (err) => {
+        assert.ok(err instanceof ViewSpecError);
+        assert.match(err.message, /no such table/i);
+        assert.match(err.message, /nonexistent/);
+        assert.doesNotMatch(err.message, /"widgets" has no rows yet/);
+        return true;
+      });
+    } finally {
+      r.rm();
+    }
+  });
+
   test("an ordinary raw-SQL failure against a non-empty projection still names the view, not a bare SQLite error", async () => {
     const r = repo("gitdata-generic-query-error-");
     try {
