@@ -10,18 +10,15 @@
 #
 # AUTH IS OIDC TRUSTED PUBLISHING — there is no NPM_TOKEN secret in this repo, deliberately.
 # npm mints a short-lived token from the GitHub OIDC identity of this exact repo + workflow
-# file, so a leaked long-lived token cannot exist. One-time setup on npmjs.com that CANNOT be
-# done from here:
+# file, so a leaked long-lived token cannot exist. Configured on npmjs.com as of v0.1.0:
 #
 #   npmjs.com → the @marktiderman/gitdata package → Settings → Trusted Publisher → GitHub Actions
 #     repository: marktiderman/gitdata     workflow: release.yml
 #
-# FIRST-PUBLISH BOOTSTRAP: a trusted publisher attaches to a package that exists. If npm will
-# not let you configure one for the never-published name, publish 0.1.0 once by hand with a
-# short-lived granular automation token (`npm publish` from a clean checkout — prepublishOnly
-# runs the tests), then attach the trusted publisher and delete the token. Until the setup is
-# done, this workflow fails at the publish step with 404/403 — that is the expected pre-setup
-# state, not a bug in the workflow.
+# HISTORICAL, for anyone bootstrapping a fresh package this way: a trusted publisher can only
+# attach to a package that already exists, so v0.1.0 was published by hand with a short-lived
+# granular token, after which the publisher was attached and the token deleted. Nothing needs
+# repeating — every release from v0.1.1 on runs through this workflow with no stored credential.
 name: Release
 
 on:
