@@ -161,7 +161,15 @@ export async function compileView(db, spec, { emptyTables = new Set() } = {}) {
       // raw SQLite parser error that points at the SQL, not the actual cause. A shape query
       // names its table structurally (`from:`), so when that table is empty this is not a guess
       // — say so and name the fix, instead of forwarding "no such column" to a stranger.
-      const empty = q && typeof q === "object" ? [...shapeTables(q)].find((t) => emptyTables.has(t)) : null;
+      //
+      // Gated on the underlying error actually being a missing-column/table failure, not just on
+      // the table being empty: a malformed shape spec (ShapeError, thrown before any SQL runs —
+      // "needs `line:`", "needs `blocks:` list") can equally reference an empty table, and that
+      // real cause must not be swallowed by a misleading "add a row" message.
+      const looksLikeMissingColumnOrTable = /no such (column|table)/i.test(cause.message);
+      const empty = looksLikeMissingColumnOrTable && q && typeof q === "object"
+        ? [...shapeTables(q)].find((t) => emptyTables.has(t))
+        : null;
       const message = empty
         ? `${spec._file ?? spec.id}: "${empty}" has no rows yet — add a row under data/${empty}/ (copy its _template.md if it has one), then re-run`
         : `${spec._file ?? spec.id}: query "${name}" failed — ${cause.message}`;

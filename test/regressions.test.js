@@ -537,6 +537,38 @@ describe("issue #4 — a freshly-scaffolded empty table names the fix, not a raw
     }
   });
 
+  test("a malformed shape spec that also references an empty table gets its real error, not a false 'no rows yet'", async () => {
+    // A shape's own validation (ShapeError) throws before any SQL runs — a spec missing a
+    // required field must not be misattributed to the empty table it happens to name via `from:`.
+    const r = repo("gitdata-empty-plus-malformed-");
+    try {
+      mkdirSync(join(r.root, "data/widgets"), { recursive: true });
+      r.write(
+        "data/_views/v.view.yml",
+        [
+          "id: v",
+          "out: data/_views/v.md",
+          "queries:",
+          "  stats:",
+          "    shape: digest",
+          "    counts:",
+          "      total: { from: widgets }",
+          // deliberately missing `blocks:` — a genuine spec error, unrelated to the empty table
+          "template: '{{stats}}'",
+          "",
+        ].join("\n"),
+      );
+      await assert.rejects(rollup({ dataRoot: join(r.root, "data"), repoRoot: r.root }), (err) => {
+        assert.ok(err instanceof ViewSpecError);
+        assert.match(err.message, /blocks/);
+        assert.doesNotMatch(err.message, /has no rows yet/);
+        return true;
+      });
+    } finally {
+      r.rm();
+    }
+  });
+
   test("an ordinary raw-SQL failure against a non-empty projection still names the view, not a bare SQLite error", async () => {
     const r = repo("gitdata-generic-query-error-");
     try {
