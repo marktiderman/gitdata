@@ -1,0 +1,25 @@
+README.md
+  s_3d17522fe9d2bd::t_41991abbf6be17 62,64
+packs/feature-management/pack.yml
+  s_3d17522fe9d2bd::t_8a45e86fb4fdd4 28-30,32-37
+packs/feature-management/files/data/features/README.md
+  s_3d17522fe9d2bd::t_215b19e493086d 25
+.github/workflows/release.yml
+  s_3d17522fe9d2bd::t_6ada19bf5eab1f 13,18-21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "852a007c73e4662f1af57c49d237a02403fd8b11",
+  "prompts": {},
+  "sessions": {
+    "s_3d17522fe9d2bd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "83bee720-31a4-424c-8bc3-b12848ad1b07",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Mark Tiderman <marktiderman@users.noreply.github.com>"
+    }
+  }
+}
