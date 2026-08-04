@@ -11,6 +11,7 @@ import { relative, resolve } from "node:path";
 
 import { emitCodeowners } from "./emit-codeowners.js";
 import { init, listPacks } from "./init.js";
+import { describeTables, runQuery } from "./introspect.js";
 import { diffLines, formatDiff, rollup } from "./rollup.js";
 import { validate } from "./validate.js";
 
@@ -22,6 +23,9 @@ const USAGE = `gitdata — docs as data in git
   gitdata validate [--root <dir>]                        check rows against data/_schema/*.schema.yml
   gitdata emit codeowners [--check] [--root <dir>] [--out <path>]
                                                           emit .github/CODEOWNERS from data/*/_owners.yml
+  gitdata tables [--json] [--root <dir>]                 list tables, columns, inferred types, row counts
+  gitdata query "<SQL>" [--json] [--root <dir>]
+                                                          run a read-only SQL statement against the projection
   gitdata packs                                          list available packs
 
 Options:
@@ -29,15 +33,23 @@ Options:
   --check        report drift without writing; exits non-zero if anything drifted or is missing.
   --diff         with --check: print the line diff for each drifted/missing view. No effect
                  without --check; a normal rollup writes, it does not compare.
-  --json         with --check: emit a structured drift report on stdout instead of the plain-text
-                 listing. No effect without --check. Combine with --diff to include diff content.
+  --json         with --check, tables, or query: emit structured output instead of a plain-text
+                 listing. No effect on --check without --check itself. Combine with --diff to
+                 include diff content in --check's report.
   --out <path>   emit codeowners: output path (default: <root>/.github/CODEOWNERS)
 `;
 
+// Boolean flags recognized anywhere in argv, and the value-taking flags with where their value
+// lands in `args`. Kept in one place so positional-argument extraction (`rest`, below) knows
+// exactly what to skip past — `query`'s SQL text is the one positional argument any command takes.
+const BOOL_FLAGS = ["--check", "--diff", "--json"];
+const VALUE_FLAGS = [["--root", "root"], ["--pack", "pack"], ["--out", "out"]];
+
 function parseArgs(argv) {
-  // A subcommand is argv[1] when it isn't itself a flag — `emit codeowners`, never `rollup
-  // --check` mistaken for a subcommand named "--check".
-  const sub = argv[1] && !argv[1].startsWith("--") ? argv[1] : null;
+  // A subcommand is argv[1] when the command itself takes one and it isn't a flag — `emit
+  // codeowners`, never `rollup --check` mistaken for a subcommand, and never `query`'s own SQL
+  // text (which is a positional argument, not a subcommand).
+  const sub = argv[0] === "emit" && argv[1] && !argv[1].startsWith("--") ? argv[1] : null;
   const args = {
     command: argv[0],
     sub,
@@ -48,12 +60,21 @@ function parseArgs(argv) {
     pack: null,
     out: null,
   };
-  for (const [flag, key] of [["--root", "root"], ["--pack", "pack"], ["--out", "out"]]) {
+  const consumed = new Set([0]);
+  if (sub) consumed.add(1);
+  for (const [flag, key] of VALUE_FLAGS) {
     const i = argv.indexOf(flag);
     if (i === -1) continue;
     if (!argv[i + 1] || argv[i + 1].startsWith("--")) throw new Error(`${flag} requires a value`);
     args[key] = key === "root" ? resolve(argv[i + 1]) : argv[i + 1];
+    consumed.add(i);
+    consumed.add(i + 1);
   }
+  argv.forEach((a, i) => {
+    if (BOOL_FLAGS.includes(a)) consumed.add(i);
+  });
+  // Whatever argv positions no flag or subcommand claimed — for `query`, that is its SQL statement.
+  args.rest = argv.filter((_, i) => !consumed.has(i));
   return args;
 }
 
@@ -191,6 +212,52 @@ async function cmdEmitCodeowners({ root, check, out }) {
   return 0;
 }
 
+async function cmdTables({ root, json }) {
+  const tables = await describeTables(resolve(root, "data"));
+
+  if (json) {
+    console.log(JSON.stringify(tables, null, 2));
+    return 0;
+  }
+  if (tables.length === 0) {
+    console.log("  no tables found — add data/<table>/<row>.md");
+    return 0;
+  }
+  for (const t of tables) {
+    console.log(`${t.table} (${t.rows} row${t.rows === 1 ? "" : "s"})`);
+    for (const c of t.columns) console.log(`  ${c.name.padEnd(24)} ${c.type}`);
+    console.log("");
+  }
+  return 0;
+}
+
+/** A readable plain-text table for `query`'s default (non-`--json`) output. */
+function formatRows(rows) {
+  if (rows.length === 0) return "  (0 rows)";
+  const columns = Object.keys(rows[0]);
+  const cell = (v) => (v === null || v === undefined ? "" : String(v));
+  const widths = columns.map((c) => Math.max(c.length, ...rows.map((r) => cell(r[c]).length)));
+  const line = (cells) => "  " + cells.map((c, i) => c.padEnd(widths[i])).join("  ");
+
+  const lines = [line(columns), line(widths.map((w) => "-".repeat(w)))];
+  for (const r of rows) lines.push(line(columns.map((c) => cell(r[c]))));
+  lines.push(`\n  ${rows.length} row${rows.length === 1 ? "" : "s"}`);
+  return lines.join("\n");
+}
+
+async function cmdQuery({ root, json, rest }) {
+  const [sql] = rest;
+  if (!sql) throw new Error('query requires a SQL statement, e.g. gitdata query "SELECT * FROM <table>"');
+  const rows = await runQuery(resolve(root, "data"), sql);
+
+  if (json) {
+    console.log(JSON.stringify(rows, null, 2));
+    return 0;
+  }
+  console.log(formatRows(rows));
+  return 0;
+}
+
 const argv = process.argv.slice(2);
 // Help and version are answers, not errors — `gitdata --help && ...` must not read as a broken
 // install, and CI needs a way to ask an install what it is.
@@ -210,6 +277,8 @@ try {
   if (args.command === "validate") process.exit(cmdValidate(args));
   if (args.command === "emit" && args.sub === "codeowners") process.exit(await cmdEmitCodeowners(args));
   if (args.command === "packs") process.exit(cmdPacks());
+  if (args.command === "tables") process.exit(await cmdTables(args));
+  if (args.command === "query") process.exit(await cmdQuery(args));
   console.log(USAGE);
   process.exit(args.command ? 1 : 0);
 } catch (err) {

@@ -838,3 +838,93 @@ describe("real specimen: the feature-management pack's shipped schema", () => {
     assert.equal(found.column, "status");
   });
 });
+
+describe("introspection (tables/query)", () => {
+  test("describeTables lists tables and columns sorted by name, independent of frontmatter key order", async () => {
+    const r = repo("gitdata-tables-");
+    try {
+      // Deliberately opposite key order between the two rows — column sort must not depend on it.
+      r.write("data/things/a.md", "---\ntier: 2\nid: T-002\n---\nA.\n");
+      r.write("data/things/b.md", "---\nid: T-001\ntier: 1\n---\nB.\n");
+      mkdirSync(join(r.root, "data/empty"), { recursive: true });
+
+      const result = await describeTables(join(r.root, "data"));
+
+      assert.deepEqual(result.map((t) => t.table), ["empty", "things"]);
+
+      const empty = result.find((t) => t.table === "empty");
+      assert.equal(empty.rows, 0);
+      // A table with no rows still gets `_file` (project.js guarantees it), typed `null` since no
+      // value was ever stored in it.
+      assert.deepEqual(empty.columns, [{ name: "_file", type: "null" }]);
+
+      const things = result.find((t) => t.table === "things");
+      assert.equal(things.rows, 2);
+      // Every key load.js puts on a row is included — `_body` (the markdown body) as well as `_file`.
+      assert.deepEqual(
+        things.columns.map((c) => c.name),
+        ["_body", "_file", "id", "tier"],
+      );
+      assert.deepEqual(things.columns.find((c) => c.name === "id").type, "text");
+      assert.deepEqual(things.columns.find((c) => c.name === "tier").type, "integer");
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("describeTables reports a mixed-type column as the sorted union of its storage classes", async () => {
+    const r = repo("gitdata-tables-mixed-");
+    try {
+      r.write("data/things/a.md", "---\nid: T-001\ncount: 1\n---\nA.\n");
+      r.write("data/things/b.md", '---\nid: T-002\ncount: "two"\n---\nB.\n');
+
+      const [things] = await describeTables(join(r.root, "data"));
+      assert.equal(things.columns.find((c) => c.name === "count").type, "integer|text");
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("assertReadOnly accepts SELECT/WITH/EXPLAIN and rejects writes, multi-statements, and non-reads", () => {
+    assert.equal(assertReadOnly("SELECT * FROM things"), "SELECT * FROM things");
+    assert.equal(assertReadOnly("  select 1  "), "select 1");
+    assert.equal(assertReadOnly("WITH x AS (SELECT 1) SELECT * FROM x"), "WITH x AS (SELECT 1) SELECT * FROM x");
+    assert.equal(assertReadOnly("EXPLAIN SELECT 1"), "EXPLAIN SELECT 1");
+    // A trailing semicolon on an otherwise-single statement is not a second statement.
+    assert.equal(assertReadOnly("SELECT 1;"), "SELECT 1");
+
+    for (const sql of [
+      "INSERT INTO things (id) VALUES ('X')",
+      "UPDATE things SET id = 'X'",
+      "DELETE FROM things",
+      "DROP TABLE things",
+      "ATTACH DATABASE 'x' AS x",
+      "CREATE TABLE evil (x)",
+      "PRAGMA table_info(things)",
+    ]) {
+      assert.throws(() => assertReadOnly(sql), QueryError, sql);
+    }
+
+    assert.throws(() => assertReadOnly("SELECT 1; DROP TABLE things"), QueryError);
+    assert.throws(() => assertReadOnly(""), QueryError);
+  });
+
+  test("runQuery runs a real read against the projection, and refuses a mutating statement before touching it", async () => {
+    const r = repo("gitdata-query-");
+    try {
+      r.write("data/things/a.md", "---\nid: T-001\n---\nA.\n");
+      r.write("data/things/b.md", "---\nid: T-002\n---\nB.\n");
+
+      const rows = await runQuery(join(r.root, "data"), "SELECT id FROM things ORDER BY id");
+      assert.deepEqual(rows, [{ id: "T-001" }, { id: "T-002" }]);
+
+      await assert.rejects(runQuery(join(r.root, "data"), "DELETE FROM things"), QueryError);
+      // The guard fired; nothing was deleted from the (fresh, per-call) projection either way, but
+      // a second read confirms the statement was never allowed to run at all.
+      const stillTwo = await runQuery(join(r.root, "data"), "SELECT COUNT(*) AS n FROM things");
+      assert.equal(stillTwo[0].n, 2);
+    } finally {
+      r.rm();
+    }
+  });
+});
