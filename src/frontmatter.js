@@ -10,17 +10,22 @@
  */
 import { parse as parseYaml } from "yaml";
 
-const FENCE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+// The inner group is optional so the canonical empty block `---\n---\n` parses — GitHub,
+// Obsidian, Jekyll, and gray-matter all accept it, and a stub file awaiting metadata must not
+// kill the rollup.
+const FENCE = /^---\r?\n(?:([\s\S]*?)\r?\n)?---\r?\n?/;
 
 export class FrontmatterError extends Error {}
 
 export function parseFrontmatter(text, { file = "<string>" } = {}) {
+  // Editors that save UTF-8 with a BOM prepend U+FEFF, which would stop `^---` matching.
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
   const match = FENCE.exec(text);
   if (!match) throw new FrontmatterError(`${file}: no frontmatter block`);
 
   let data;
   try {
-    data = parseYaml(match[1]);
+    data = parseYaml(match[1] ?? "");
   } catch (cause) {
     throw new FrontmatterError(`${file}: unparseable frontmatter — ${cause.message}`);
   }

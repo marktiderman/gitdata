@@ -10,17 +10,28 @@
  * change without a major version.
  */
 
-// Regenerate views, or report drift without writing.
-export { rollup, loadViewSpecs, compileView, ViewSpecError } from "./rollup.js";
+// Regenerate views, or report drift without writing. diffLines/formatDiff turn a --check drift
+// pair (compiled vs. committed) into something readable instead of just a status string.
+export { rollup, loadViewSpecs, compileView, diffLines, formatDiff, ViewSpecError } from "./rollup.js";
 
 // Scaffold a `data/` trellis — bare, or from a pack.
 export { init, listPacks, PackError } from "./init.js";
 
+// Check rows against data/_schema/<table>.schema.yml — opt-in, reports only, never blocks.
+export { validate, loadSchemas, SchemaSpecError } from "./validate.js";
+
+// Emit .github/CODEOWNERS from data/<table>/_owners.yml, or report drift without writing.
+export { emitCodeowners, codeownersLines, renderCodeowners, EmitError } from "./emit-codeowners.js";
+
 // The pipeline, for consumers building their own tooling on top: markdown → tables → SQLite.
-export { load } from "./load.js";
-export { project, query } from "./project.js";
+export { load, LoadError } from "./load.js";
+export { project, query, ProjectError } from "./project.js";
 export { parseFrontmatter, FrontmatterError } from "./frontmatter.js";
 export { renderTemplate, RenderError } from "./render.js";
 
 // Shapes: the registry, the dispatcher, and the error every shape throws.
 export { SHAPES, runShape, ShapeError } from "./shapes/index.js";
+
+// Introspection: table/column/type discovery, and the guarded read-only SQL escape hatch behind
+// the `tables`/`query` CLI commands.
+export { describeTables, runQuery, assertReadOnly, QueryError } from "./introspect.js";

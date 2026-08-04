@@ -22,7 +22,7 @@ export function renderTemplate(template, results) {
 
     if (column) {
       if (rows.length === 0) throw new RenderError(`query "${name}" returned no rows for {{${name}.${column}}}`);
-      if (!(column in rows[0])) throw new RenderError(`query "${name}" has no column "${column}"`);
+      if (!Object.hasOwn(rows[0], column)) throw new RenderError(`query "${name}" has no column "${column}"`);
       return String(rows[0][column] ?? "");
     }
 

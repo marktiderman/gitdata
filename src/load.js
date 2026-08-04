@@ -15,22 +15,45 @@
  * Rows are sorted by their path relative to the table so a compile never depends on directory
  * order — that determinism is what makes byte-identical drift checking possible.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter } from "./frontmatter.js";
 
+export class LoadError extends Error {}
+
 const isRowFile = (name) =>
   name.endsWith(".md") && !name.startsWith("_") && name.toLowerCase() !== "readme.md";
 
+/**
+ * Classify an entry by what it points AT, not what it is: a Dirent for a symlink reports neither
+ * file nor directory, which silently dropped every row behind a symlinked shard — the exact
+ * failure mode this loader's docstring vows to prevent. `statSync` follows links; a dangling one
+ * fails loud with the path instead of a raw ENOENT.
+ */
+function statOf(dir, name, rel) {
+  try {
+    return statSync(join(dir, name));
+  } catch (cause) {
+    throw new LoadError(`${rel}: unreadable entry (dangling symlink?) — ${cause.message}`);
+  }
+}
+
 /** Row-file paths under `dir`, relative to it, depth-first and sorted. */
-function rowPaths(dir, prefix = "") {
+function rowPaths(dir, prefix = "", seen = new Set([realpathSync(dir)])) {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.name.startsWith("_") || entry.name.startsWith(".")) continue;
     const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) out.push(...rowPaths(join(dir, entry.name), rel));
-    else if (isRowFile(entry.name)) out.push(rel);
+    const stat = statOf(dir, entry.name, rel);
+    if (stat.isDirectory()) {
+      // A symlink pointing at an ancestor would otherwise recurse until the stack overflows.
+      const real = realpathSync(join(dir, entry.name));
+      if (seen.has(real)) continue;
+      out.push(...rowPaths(join(dir, entry.name), rel, new Set([...seen, real])));
+    } else if (isRowFile(entry.name)) {
+      out.push(rel);
+    }
   }
   return out.sort();
 }
@@ -41,7 +64,7 @@ export function load(root) {
 
   for (const entry of readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.name.startsWith("_") || entry.name.startsWith(".")) continue;
-    if (!entry.isDirectory()) continue;
+    if (!statOf(root, entry.name, entry.name).isDirectory()) continue;
     const dir = join(root, entry.name);
 
     const rows = [];

@@ -124,6 +124,10 @@ export function init({ root, pack }) {
       mkdirSync(dirname(keep), { recursive: true });
       writeFileSync(keep, "");
       written.push(relative(resolve(root), keep));
+    } else {
+      // Re-runs must account for every file the first run wrote, or "0 written, 3 left alone"
+      // silently loses one from the books.
+      skipped.push(relative(resolve(root), keep));
     }
   }
 

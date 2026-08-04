@@ -1,0 +1,19 @@
+# The features table's contract — read by `gitdata validate`, enforced by nothing but yourself
+# and whatever CI check you wire `validate`'s exit code into. Loosen it, tighten it, delete it —
+# it's yours the moment it lands, same as everything else this pack installs.
+kind: table-schema
+
+required: [id, title, status, priority]
+unique: [id]
+
+enum:
+  status: [idea, planned, building, shipped, dropped]
+  priority: [P0, P1, P2, P3]
+
+pattern:
+  id: "^F-\\d{3}$"
+
+# A sub-feature's parent must be a real feature's id — the check a plain frontmatter file can
+# never make on its own, since nothing else looks at every row when only one is being edited.
+ref:
+  parent: features.id

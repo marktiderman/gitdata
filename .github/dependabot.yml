@@ -1,0 +1,19 @@
+# Update signal for the two SHA-pinned actions and the exact-pinned sqlite-wasm dependency —
+# pins without a bump signal silently age. Monthly, grouped: this repo's CI billing contract
+# (see ci.yml) values few, quiet runs over instant freshness.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      npm:
+        patterns: ["*"]

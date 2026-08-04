@@ -88,9 +88,11 @@ export function column(spec) {
  *
  * `tie_break` is not optional in spirit: rows sharing a sort value would otherwise come back in
  * whatever order the database chose, and a drift check would fail at random on a different
- * checkout. It defaults to `id` for exactly that reason.
+ * checkout. It defaults to `_file` — the one column the engine itself guarantees on every table,
+ * unique per row — because defaulting to `id` baked a consumer column name into the engine and
+ * crashed any table without one.
  */
-export function orderBy(order, { defaultTieBreak = "id" } = {}) {
+export function orderBy(order, { defaultTieBreak = "_file" } = {}) {
   if (!order) return [ident(defaultTieBreak)];
   const spec = typeof order === "string" ? { by: order } : order;
   const keys = Array.isArray(spec.by) ? spec.by : [spec.by];

@@ -21,12 +21,16 @@ installs:
   - data/features/_template.md      # the exemplar to copy for a new feature
   - data/features/README.md         # what a row means
   - data/_views/features-board.view.yml
+  - data/_schema/features.schema.yml # required/unique/enum/pattern/ref — `gitdata validate` reads this
 
 # After install:
 #   cp data/features/_template.md data/features/F-001--my-feature.md   (then edit it)
-#   npx @marktiderman/gitdata rollup                                    (writes the board)
-#   npx @marktiderman/gitdata rollup --check                            (CI: has it drifted?)
+#   npx github:marktiderman/gitdata rollup                              (writes the board)
+#   npx github:marktiderman/gitdata rollup --check                      (CI: has it drifted?)
+#   npx github:marktiderman/gitdata validate                            (CI: does every row hold up?)
 #
-# Always the scoped name. Unscoped, `gitdata` on npm is an unrelated 2016 package by another
-# author — so the bare command fetches and runs a stranger's code, in a pack, on somebody
-# else's machine, on our instruction. test/boundaries.test.js keeps this from coming back.
+# Use the github: spec until the scoped package is actually published — @marktiderman/gitdata is
+# not on the registry yet, and instructions that 404 teach people to improvise. Never the bare
+# name: unscoped `gitdata` on npm is an unrelated 2016 package by another author — the bare
+# command fetches and runs a stranger's code, in a pack, on somebody else's machine, on our
+# instruction. test/boundaries.test.js keeps this from coming back.

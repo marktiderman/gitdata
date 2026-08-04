@@ -1,0 +1,13 @@
+# GitDATA guides. GitHub enforces. This file is the enforcement half — the project dogfooding
+# its own law (north star #5: permissions via GitHub's out-of-the-box features).
+#
+# NOTE: CODEOWNERS only binds once branch protection (or a ruleset) on main requires
+# code-owner review. Repo settings, not files, flip that switch.
+
+# Everything, by default.
+* @marktiderman
+
+# The operator-authored north star and the laws. CLAUDE.md says "edited only by the operator" —
+# this is the line that makes GitHub able to enforce it.
+/CLAUDE.md @marktiderman
+/README.md @marktiderman

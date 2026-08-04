@@ -1,0 +1,95 @@
+# release.yml — publish to npm on a version tag.
+#
+# WHY A TAG, NOT CHANGESETS. Changesets exists to coordinate versions across many packages
+# that depend on each other. gitdata is ONE package with no workspace and no siblings, so
+# changesets would add a bot, a config file, and a release PR to solve a problem this repo
+# does not have. Cutting a release here is: bump `version`, merge, tag, push.
+#
+#   npm version patch -m "release: v%s"   # edits package.json + package-lock.json, commits, tags
+#   git push --follow-tags
+#
+# AUTH IS OIDC TRUSTED PUBLISHING — there is no NPM_TOKEN secret in this repo, deliberately.
+# npm mints a short-lived token from the GitHub OIDC identity of this exact repo + workflow
+# file, so a leaked long-lived token cannot exist. One-time setup on npmjs.com that CANNOT be
+# done from here:
+#
+#   npmjs.com → the @marktiderman/gitdata package → Settings → Trusted Publisher → GitHub Actions
+#     repository: marktiderman/gitdata     workflow: release.yml
+#
+# FIRST-PUBLISH BOOTSTRAP: a trusted publisher attaches to a package that exists. If npm will
+# not let you configure one for the never-published name, publish 0.1.0 once by hand with a
+# short-lived granular automation token (`npm publish` from a clean checkout — prepublishOnly
+# runs the tests), then attach the trusted publisher and delete the token. Until the setup is
+# done, this workflow fails at the publish step with 404/403 — that is the expected pre-setup
+# state, not a bug in the workflow.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false # never cancel a half-finished publish
+
+jobs:
+  release:
+    name: publish to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # REQUIRED for OIDC Trusted Publishing (and provenance) — scoped to this job
+                       # only, so a future job added to this workflow does not inherit OIDC write.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org # writes the .npmrc npm publish reads
+
+      # OIDC Trusted Publishing needs npm >= 11.5.1; Node 22 bundles 10.x. Pinned to an exact
+      # reviewed version rather than a caret range or `latest`: the 11.5.x tarballs shipped an
+      # arborist missing `promise-retry` (MODULE_NOT_FOUND on any install), and an exact pin
+      # means Dependabot proposes the next bump as a reviewable diff instead of it landing
+      # silently on the next release run.
+      - name: Ensure npm supports OIDC Trusted Publishing
+        run: |
+          npm install -g npm@11.6.0
+          npm --version
+
+      - name: Install
+        run: npm ci
+
+      # The tag is the release trigger, so a tag that disagrees with package.json would
+      # publish a version nobody asked for, under a tag pointing at different code. Cheap
+      # check, unrecoverable mistake — npm versions are immutable once published.
+      - name: Tag must match package.json version
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag v$TAG does not match package.json version $PKG"
+            exit 1
+          fi
+          echo "publishing v$PKG"
+
+      # Publishing untested code is how a broken release reaches consumers. Same suite CI
+      # runs; ~1s.
+      - name: Test
+        run: npm test
+
+      # No `--access public` flag needed: publishConfig.access in package.json says so, which
+      # keeps the setting with the package rather than in workflow YAML. Provenance comes free
+      # with trusted publishing (id-token: write above) — package.json deliberately does not
+      # set `provenance: false`, so the attestation is generated here and a manual bootstrap
+      # publish still works locally.
+      - name: Publish
+        run: npm publish
