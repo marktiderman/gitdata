@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -475,6 +475,151 @@ describe("compile: escape hatch", () => {
       r.write("data/_views/v.view.yml", "id: v\nout: data/_views/v.md\ncompile: ./v.compile.js\n");
       r.write("data/_views/v.compile.js", "export default () => 42;\n");
       await assert.rejects(rollup({ dataRoot: join(r.root, "data"), repoRoot: r.root }), /must return a string/);
+    } finally {
+      r.rm();
+    }
+  });
+});
+
+describe("issue #4 — a freshly-scaffolded empty table names the fix, not a raw SQLITE_ERROR", () => {
+  test("the exact repro: init the pack, rollup with zero rows", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gitdata-issue4-"));
+    try {
+      const initResult = runCli(["init", "--pack", "feature-management", "--root", dir]);
+      assert.equal(initResult.status, 0);
+
+      const result = runCli(["rollup", "--root", dir]);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /features-board\.view\.yml/);
+      assert.match(result.stderr, /"features" has no rows yet/);
+      assert.match(result.stderr, /data\/features\//);
+      assert.doesNotMatch(result.stderr, /SQLITE_ERROR/);
+
+      // The documented fix actually works, end to end.
+      copyFileSync(join(dir, "data/features/_template.md"), join(dir, "data/features/F-000--example.md"));
+      const fixed = runCli(["rollup", "--root", dir]);
+      assert.equal(fixed.status, 0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an empty table is found via `from:` nested inside a sections list, not just top-level", async () => {
+    const r = repo("gitdata-empty-shape-");
+    try {
+      mkdirSync(join(r.root, "data/widgets"), { recursive: true });
+      r.write(
+        "data/_views/v.view.yml",
+        [
+          "id: v",
+          "out: data/_views/v.md",
+          "queries:",
+          "  body:",
+          "    shape: sections",
+          "    sections:",
+          "      - heading: ['', '## All']",
+          "        from: widgets",
+          "        columns:",
+          "          - { from: id, as: id }",
+          "template: '{{body}}'",
+          "",
+        ].join("\n"),
+      );
+      await assert.rejects(rollup({ dataRoot: join(r.root, "data"), repoRoot: r.root }), (err) => {
+        assert.ok(err instanceof ViewSpecError);
+        assert.match(err.message, /"widgets" has no rows yet/);
+        assert.match(err.message, /data\/widgets\//);
+        assert.doesNotMatch(err.message, /SQLITE_ERROR/);
+        return true;
+      });
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("a malformed shape spec that also references an empty table gets its real error, not a false 'no rows yet'", async () => {
+    // A shape's own validation (ShapeError) throws before any SQL runs — a spec missing a
+    // required field must not be misattributed to the empty table it happens to name via `from:`.
+    const r = repo("gitdata-empty-plus-malformed-");
+    try {
+      mkdirSync(join(r.root, "data/widgets"), { recursive: true });
+      r.write(
+        "data/_views/v.view.yml",
+        [
+          "id: v",
+          "out: data/_views/v.md",
+          "queries:",
+          "  stats:",
+          "    shape: digest",
+          "    counts:",
+          "      total: { from: widgets }",
+          // deliberately missing `blocks:` — a genuine spec error, unrelated to the empty table
+          "template: '{{stats}}'",
+          "",
+        ].join("\n"),
+      );
+      await assert.rejects(rollup({ dataRoot: join(r.root, "data"), repoRoot: r.root }), (err) => {
+        assert.ok(err instanceof ViewSpecError);
+        assert.match(err.message, /blocks/);
+        assert.doesNotMatch(err.message, /has no rows yet/);
+        return true;
+      });
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("a query naming both an empty real table and a nonexistent table blames the nonexistent one, not the empty one", async () => {
+    // project() creates a table for every loaded directory even with zero rows — "no such table"
+    // can therefore never legitimately mean "merely empty", only "does not exist at all". A query
+    // touching both must not let the real, empty table it also references steal the blame.
+    const r = repo("gitdata-empty-plus-missing-table-");
+    try {
+      mkdirSync(join(r.root, "data/widgets"), { recursive: true }); // real, empty
+      r.write(
+        "data/_views/v.view.yml",
+        [
+          "id: v",
+          "out: data/_views/v.md",
+          "queries:",
+          "  stats:",
+          "    shape: digest",
+          "    counts:",
+          "      total: { from: widgets }",
+          "      other: { from: nonexistent }",
+          "    blocks:",
+          '      - text: "{total} / {other}"',
+          "template: '{{stats}}'",
+          "",
+        ].join("\n"),
+      );
+      await assert.rejects(rollup({ dataRoot: join(r.root, "data"), repoRoot: r.root }), (err) => {
+        assert.ok(err instanceof ViewSpecError);
+        assert.match(err.message, /no such table/i);
+        assert.match(err.message, /nonexistent/);
+        assert.doesNotMatch(err.message, /"widgets" has no rows yet/);
+        return true;
+      });
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("an ordinary raw-SQL failure against a non-empty projection still names the view, not a bare SQLite error", async () => {
+    const r = repo("gitdata-generic-query-error-");
+    try {
+      r.write("data/things/T-001.md", "---\nid: T-001\n---\nBody.\n");
+      r.write(
+        "data/_views/v.view.yml",
+        "id: v\nout: data/_views/v.md\nqueries:\n  q: SELECT typo_column FROM things\ntemplate: '{{q}}'\n",
+      );
+      await assert.rejects(rollup({ dataRoot: join(r.root, "data"), repoRoot: r.root }), (err) => {
+        assert.ok(err instanceof ViewSpecError);
+        assert.match(err.message, /v\.view\.yml/);
+        assert.match(err.message, /query "q" failed/);
+        assert.match(err.message, /typo_column/);
+        return true;
+      });
     } finally {
       r.rm();
     }

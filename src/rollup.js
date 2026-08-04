@@ -113,7 +113,29 @@ export function loadViewSpecs(dataRoot) {
  * default export receives `(db, { query, runShape })` and returns the artifact text — the escape
  * hatch for anything the template cannot express, so the template syntax never grows.
  */
-export async function compileView(db, spec) {
+/**
+ * Every table name a shape spec names via `from:`, at any nesting depth — `digest`'s blocks and
+ * counts, `sections`'s section list, and `tree`'s top-level `from:` all use the same key, just at
+ * different depths. Structural, not semantic: this walks the shape's own declared vocabulary
+ * (every shape requires `from:` to name its table), it does not know what any table means.
+ */
+function shapeTables(spec) {
+  const found = new Set();
+  const walk = (node) => {
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+    } else if (node && typeof node === "object") {
+      for (const [key, value] of Object.entries(node)) {
+        if (key === "from" && typeof value === "string") found.add(value);
+        else walk(value);
+      }
+    }
+  };
+  walk(spec);
+  return found;
+}
+
+export async function compileView(db, spec, { emptyTables = new Set() } = {}) {
   if (spec.compile) {
     if (!spec._compilePath) {
       throw new ViewSpecError(`${spec._file ?? spec.id}: "compile" spec must be resolved by rollup() (missing _compilePath)`);
@@ -131,7 +153,32 @@ export async function compileView(db, spec) {
 
   const results = {};
   for (const [name, q] of Object.entries(spec.queries)) {
-    results[name] = typeof q === "string" ? query(db, q) : runShape(db, q);
+    try {
+      results[name] = typeof q === "string" ? query(db, q) : runShape(db, q);
+    } catch (cause) {
+      // The literal first-run state (issue #4): a table with zero rows has zero discovered
+      // columns beyond `_file`/`_body`, so any query naming a frontmatter column fails with a
+      // raw SQLite parser error that points at the SQL, not the actual cause. A shape query
+      // names its table structurally (`from:`), so when that table is empty this is not a guess
+      // — say so and name the fix, instead of forwarding "no such column" to a stranger.
+      //
+      // Gated on the underlying error actually being a missing-column failure, not just on the
+      // table being empty: a malformed shape spec (ShapeError, thrown before any SQL runs —
+      // "needs `line:`", "needs `blocks:` list") can equally reference an empty table, and that
+      // real cause must not be swallowed by a misleading "add a row" message. "no such table" is
+      // deliberately excluded — project() creates a table for every loaded directory even with
+      // zero rows, so a genuine "no such table" always means a table that doesn't exist at all,
+      // never one that's merely empty; conflating the two could misattribute the error to an
+      // unrelated empty table a query happens to also reference.
+      const looksLikeMissingColumn = /no such column/i.test(cause.message);
+      const empty = looksLikeMissingColumn && q && typeof q === "object"
+        ? [...shapeTables(q)].find((t) => emptyTables.has(t))
+        : null;
+      const message = empty
+        ? `${spec._file ?? spec.id}: "${empty}" has no rows yet — add a row under data/${empty}/ (copy its _template.md if it has one), then re-run`
+        : `${spec._file ?? spec.id}: query "${name}" failed — ${cause.message}`;
+      throw new ViewSpecError(message, { cause });
+    }
   }
   return renderTemplate(spec.template, results);
 }
@@ -223,7 +270,10 @@ export async function rollup({ dataRoot, repoRoot, check = false }) {
   const specs = loadViewSpecs(dataRoot);
   if (specs.length === 0) return [];
 
-  const db = await project(load(dataRoot));
+  const tables = load(dataRoot);
+  const emptyTables = new Set([...tables.values()].filter((t) => t.rows.length === 0).map((t) => t.name));
+
+  const db = await project(tables);
   try {
     const results = [];
     for (const spec of specs) {
@@ -232,7 +282,7 @@ export async function rollup({ dataRoot, repoRoot, check = false }) {
         // execute code from outside the repo it belongs to.
         spec._compilePath = resolveWithin(repoRoot, resolve(dataRoot, "_views", spec.compile), spec._file, "compile");
       }
-      const compiled = await compileView(db, spec);
+      const compiled = await compileView(db, spec, { emptyTables });
       const outPath = resolveWithin(repoRoot, spec.out, spec._file, "out");
       const committed = existsSync(outPath) ? readFileSync(outPath, "utf8") : null;
 
