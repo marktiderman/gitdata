@@ -130,6 +130,233 @@ describe("pack quickstart, end to end", () => {
   });
 });
 
+/**
+ * `--data <dir>` — the second store.
+ *
+ * `<root>/data` is the right default and stays the default. It stops being expressible the moment
+ * a repo needs TWO stores: hand-authored rows and a machine-owned table set that an extractor
+ * rewrites wholesale must not share a root, because one `rollup` regenerating both is wrong. The
+ * only way to say that before was `--root data/sdk`, which puts the tables at `data/sdk/data/` and
+ * tells every other part of the tool the repo root is somewhere it is not.
+ *
+ * Every test below asserts BOTH halves — what `--data` reads, and that `--root` alone still reads
+ * exactly what it read before. A flag honoured by `validate` and not by `rollup` would be worse
+ * than no flag: the two commands would disagree about what the data is, each correct about a
+ * different directory, and nothing would report the disagreement.
+ */
+describe("--data, a second store beside the default one", () => {
+  let dRoot;
+
+  before(() => {
+    dRoot = mkdtempSync(join(tmpdir(), "gitdata-cli-data-"));
+    const put = (rel, text) => {
+      mkdirSync(join(dRoot, rel, ".."), { recursive: true });
+      writeFileSync(join(dRoot, rel), text, "utf8");
+    };
+
+    // The store a repo already has: hand-authored rows, with its own view, schema and owners.
+    put("data/agents/A-1--scout.md", "---\nid: A-1\nrole: scout\n---\nHand-authored.\n");
+    put("data/agents/_owners.yml", 'owners: ["@authors"]\n');
+    put("data/_schema/agents.schema.yml", "required: [id, role]\n");
+    put(
+      "data/_views/agents.view.yml",
+      "kind: view-spec\nid: agents\nout: data/_views/agents.md\n" +
+        "queries:\n  rows: |\n    SELECT '- ' || id AS line FROM agents ORDER BY id\ntemplate: |\n  # Agents\n  {{rows}}\n",
+    );
+
+    // The machine-owned one beside it. Its table name exists in neither store's counterpart, so a
+    // command that reads the wrong root fails to find the table rather than quietly reporting on
+    // the wrong rows — the assertion can tell "read the other store" from "read nothing".
+    put("data/sdk/envelopes/GAME_OVER.md", "---\nid: GAME_OVER\ndirection: out\n---\nEmitted by the game.\n");
+    put("data/sdk/envelopes/SET_SESSION.md", "---\nid: SET_SESSION\ndirection: in\n---\nSent to the game.\n");
+    put("data/sdk/envelopes/_owners.yml", 'owners: ["@wire"]\n');
+    put("data/sdk/_schema/envelopes.schema.yml", "required: [id, direction]\nunique: [id]\n");
+    put(
+      "data/sdk/_views/wire.view.yml",
+      "kind: view-spec\nid: wire\nout: data/sdk/_views/wire.md\n" +
+        "queries:\n  rows: |\n    SELECT '- ' || id AS line FROM envelopes ORDER BY id\ntemplate: |\n  # Wire\n  {{rows}}\n",
+    );
+  });
+
+  after(() => rmSync(dRoot, { recursive: true, force: true }));
+
+  test("tables reads the store --data names, and --root alone reads the default one", () => {
+    const named = run(["tables", "--root", dRoot, "--data", "data/sdk", "--json"]);
+    assert.equal(named.status, 0, named.stderr);
+    assert.deepEqual(
+      JSON.parse(named.stdout).map((t) => t.table),
+      ["envelopes"],
+      "--data must project the tables under it, not the ones under <root>/data",
+    );
+
+    const dflt = run(["tables", "--root", dRoot, "--json"]);
+    assert.equal(dflt.status, 0, dflt.stderr);
+    assert.ok(
+      JSON.parse(dflt.stdout).some((t) => t.table === "agents"),
+      "--root alone must still read <root>/data",
+    );
+  });
+
+  test("query runs against the store --data names", () => {
+    const r = run(["query", "SELECT id FROM envelopes ORDER BY id", "--root", dRoot, "--data", "data/sdk", "--json"]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(JSON.parse(r.stdout), [{ id: "GAME_OVER" }, { id: "SET_SESSION" }]);
+
+    // Without the flag the table is not there at all — proof the projection came from `data/sdk`
+    // and not from a default root that happened to contain the same rows.
+    assert.notEqual(run(["query", "SELECT id FROM envelopes", "--root", dRoot]).status, 0);
+  });
+
+  test("rollup compiles the views of the store --data names, and leaves the other store's alone", () => {
+    const r = run(["rollup", "--root", dRoot, "--data", "data/sdk"]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(readFileSync(join(dRoot, "data/sdk/_views/wire.md"), "utf8"), "# Wire\n- GAME_OVER\n- SET_SESSION\n");
+    assert.ok(
+      !existsSync(join(dRoot, "data/_views/agents.md")),
+      "rolling up one store must not regenerate the other — that is the whole reason the roots are separate",
+    );
+
+    // And the default root still finds its own view, unchanged by the flag existing.
+    assert.equal(run(["rollup", "--root", dRoot]).status, 0);
+    assert.equal(readFileSync(join(dRoot, "data/_views/agents.md"), "utf8"), "# Agents\n- A-1\n");
+
+    // --check follows --data too, or CI would green-light a store nobody compiled.
+    assert.equal(run(["rollup", "--check", "--root", dRoot, "--data", "data/sdk"]).status, 0);
+    writeFileSync(join(dRoot, "data/sdk/_views/wire.md"), "# Wire\nhand-edited\n", "utf8");
+    const drift = run(["rollup", "--check", "--root", dRoot, "--data", "data/sdk"]);
+    assert.equal(drift.status, 1);
+    assert.match(drift.stdout, /drifted/);
+    run(["rollup", "--root", dRoot, "--data", "data/sdk"]); // leave the fixture clean for later tests
+  });
+
+  test("validate checks the schemas of the store --data names", () => {
+    const clean = run(["validate", "--root", dRoot, "--data", "data/sdk"]);
+    assert.equal(clean.status, 0, clean.stderr);
+    assert.match(clean.stdout, /1 table\(s\) checked, 0 issues/);
+
+    // A row that breaks only the second store's schema must be reported only when that store is
+    // the one being validated — otherwise the flag is decorative and CI checks the wrong contract.
+    const bad = join(dRoot, "data/sdk/envelopes/BROKEN.md");
+    writeFileSync(bad, "---\nid: BROKEN\n---\nNo direction.\n", "utf8");
+    try {
+      const r = run(["validate", "--root", dRoot, "--data", "data/sdk"]);
+      assert.equal(r.status, 1);
+      assert.match(r.stdout, /missing "direction"/);
+      assert.equal(run(["validate", "--root", dRoot]).status, 0, "the default store is still valid, and untouched");
+    } finally {
+      rmSync(bad);
+    }
+  });
+
+  test("emit codeowners describes the store --data names, and still writes where --root says", () => {
+    // The two flags own different halves: --data is WHAT is described, --root is WHERE the
+    // description goes and what its patterns are anchored to. GitHub reads one CODEOWNERS per
+    // repo, so a second store emits through --out rather than moving the file.
+    const out = join(dRoot, ".github/CODEOWNERS-sdk");
+    const r = run(["emit", "codeowners", "--root", dRoot, "--data", "data/sdk", "--out", ".github/CODEOWNERS-sdk"]);
+    assert.equal(r.status, 0, r.stderr);
+    const text = readFileSync(out, "utf8");
+    assert.match(text, /^\/data\/sdk\/envelopes\/\*\* @wire$/m, "patterns stay relative to --root, not to --data");
+    assert.match(text, /from data\/sdk\/<table>\/_owners\.yml/, "the header names the store it actually read");
+    assert.ok(!text.includes("@authors"), "the other store's ownership must not leak in");
+
+    const dflt = run(["emit", "codeowners", "--root", dRoot]);
+    assert.equal(dflt.status, 0, dflt.stderr);
+    const dfltText = readFileSync(join(dRoot, ".github/CODEOWNERS"), "utf8");
+    assert.match(dfltText, /^\/data\/agents\/\*\* @authors$/m);
+    assert.match(dfltText, /from data\/<table>\/_owners\.yml/, "the default root's header is unchanged, byte for byte");
+    assert.ok(!dfltText.includes("@wire"));
+  });
+
+  test("init scaffolds the root --data names, and leaves an existing default store alone", () => {
+    const root = mkdtempSync(join(tmpdir(), "gitdata-cli-data-init-"));
+    try {
+      mkdirSync(join(root, "data/agents"), { recursive: true });
+      writeFileSync(join(root, "data/agents/A-1.md"), "---\nid: A-1\n---\nAlready here.\n");
+
+      const r = run(["init", "--root", root, "--data", "data/sdk"]);
+      assert.equal(r.status, 0, r.stderr);
+      assert.ok(existsSync(join(root, "data/sdk/README.md")));
+      assert.ok(existsSync(join(root, "data/sdk/_views/.gitkeep")));
+      assert.ok(!existsSync(join(root, "data/README.md")), "the default root must not be scaffolded behind the flag");
+
+      // The scaffolded README and the printed next steps are instructions someone will follow. A
+      // hardcoded `data/` there sends the reader to put their first row in the other store.
+      assert.match(readFileSync(join(root, "data/sdk/README.md"), "utf8"), /mkdir -p data\/sdk\/things/);
+      assert.match(r.stdout, /gitdata rollup --data data\/sdk/);
+
+      // Idempotent for the named root, exactly as it is for the default one.
+      const again = run(["init", "--root", root, "--data", "data/sdk"]);
+      assert.match(again.stdout, /0 file\(s\) written, 2 left alone/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("init --pack refuses a different data root rather than installing a half-wired pack", () => {
+    // A pack's files/ tree is copied verbatim, and its paths, prose and view `out:` all say
+    // `data/`. Copying it under another root would leave the tables in one place and the view
+    // writing its artifact in another, and two packs installed at two roots would declare the
+    // same `out:` and silently overwrite each other. Refusing names the constraint; installing
+    // would not.
+    const root = mkdtempSync(join(tmpdir(), "gitdata-cli-data-pack-"));
+    try {
+      const r = run(["init", "--pack", "feature-management", "--root", root, "--data", "data/sdk"]);
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /pack installs into <root>\/data/);
+      assert.ok(!existsSync(join(root, "data/sdk")), "a refused install must leave nothing behind");
+      assert.ok(!existsSync(join(root, "data/features")), "and must not fall back to the default root");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("--data must name a directory inside --root", () => {
+    // Not a trust boundary — it is about what the other consumers of --root would then emit.
+    // `emit codeowners` anchors its patterns at the data root's path relative to the repo, so a
+    // root-equal data dir renders `/**` (a rule owning the whole repo) and an outside one renders
+    // `/../elsewhere/**`, which GitHub does not honour and no reader can act on.
+    for (const [data, expected] of [
+      ["/etc", /not under/],
+      ["..", /not under/],
+      [".", /not --root itself/],
+    ]) {
+      const r = run(["tables", "--root", dRoot, "--data", data]);
+      assert.equal(r.status, 1, `--data ${data} was accepted`);
+      assert.match(r.stderr, expected);
+    }
+  });
+
+  test("a `_`-prefixed second store is invisible to the first; an ordinary one is a table of it", () => {
+    // Worth pinning because it decides where a consumer should put the second store, and the
+    // answer is not obvious. `--data` sets which root is read; it does not hide that root from
+    // whoever reads the other one. The loader's existing `_` reservation is what does that, and it
+    // is the difference between two independent stores and one store nested inside another's rows.
+    const root = mkdtempSync(join(tmpdir(), "gitdata-cli-data-nesting-"));
+    const put = (rel, text) => {
+      mkdirSync(join(root, rel, ".."), { recursive: true });
+      writeFileSync(join(root, rel), text, "utf8");
+    };
+    try {
+      put("data/agents/A-1.md", "---\nid: A-1\n---\nHand-authored.\n");
+      put("data/plain/envelopes/E-1.md", "---\nid: E-1\n---\nNested, unprefixed.\n");
+      put("data/_hidden/envelopes/E-2.md", "---\nid: E-2\n---\nNested, reserved.\n");
+
+      const tables = JSON.parse(run(["tables", "--root", root, "--json"]).stdout).map((t) => t.table);
+      assert.deepEqual(tables, ["agents", "plain"], "`_hidden` is not a table of the outer store; `plain` is");
+
+      // Both are still readable as stores in their own right — that is what --data is for.
+      for (const dir of ["data/plain", "data/_hidden"]) {
+        const r = run(["tables", "--root", root, "--data", dir, "--json"]);
+        assert.equal(r.status, 0, r.stderr);
+        assert.deepEqual(JSON.parse(r.stdout).map((t) => t.table), ["envelopes"]);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("tables and query, spawned against a real fixture repo", () => {
   let tRoot;
   before(() => {

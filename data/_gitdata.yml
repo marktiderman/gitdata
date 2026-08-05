@@ -1,0 +1,30 @@
+# gitdata's own doctor policy — the tool's compliance verb, pointed at the tool.
+#
+# Underscore-prefixed and inside `data/`, so the loader never reads it as a row. This file is NOT
+# published: `files` in package.json omits `data/` entirely, so no consumer inherits these
+# decisions — they are about this repository, not about the package.
+
+checks:
+  # GD112 is a HEURISTIC and it says so in its own message. It fires on `test/cli.test.js`, which
+  # writes `.md` fixture rows, skips `_`-prefixed files and skips READMEs — the same three signals
+  # a hand-rolled `isRowFile` would show, because the test is asserting that exact contract.
+  #
+  # It is not a reimplementation. It is the SPECIFICATION, executed. `isRowFile` lives in
+  # `src/load.js` and is the thing under test; a test that imported the predicate it is verifying
+  # would be asserting the code against itself and would pass no matter what the code did.
+  #
+  # Recorded rather than filtered in `src/doctor.js`, deliberately. Narrowing the scan to exclude
+  # `test/` would hide the check from every consumer's tests too, and a consumer's tests are a
+  # place a stale copy of the row contract genuinely does hide. The over-fire is real, it is
+  # local to this repo, and R2 anticipated exactly this: "a warn that occasionally over-fires is
+  # recoverable; a check that structurally cannot see the case it was built for is theatre."
+  #
+  # This entry is also the first live use of the reason-required suppression (R4), on the repo
+  # that shipped it. If lowering a check here had been possible without writing this paragraph,
+  # the mechanism would not be worth having.
+  GD112:
+    level: off
+    reason: >-
+      test/cli.test.js asserts the row-file contract rather than reimplementing it — the .md /
+      underscore / README signals ARE the specification under test, and importing isRowFile to
+      test isRowFile would assert the code against itself.
