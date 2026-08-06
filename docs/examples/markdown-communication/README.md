@@ -58,11 +58,15 @@ with structure, not prose — and designed their own examples independently:
 | Tables / frontmatter   |   ✅   |    ✅    |       ✅        |   ✅ (as text) |
 | ASCII wireframes       |   ✅   |    ✅    |       ✅        |       ✅       |
 | Mermaid — stable types |   ✅   |    ✅    |   ✅ (plugin)   | ❌ (readable source) |
-| Mermaid — `timeline`   |  ⚠️ ¹  |   ⚠️ ¹   |     ⚠️ ¹       | ❌ (readable source) |
+| Mermaid — `mindmap`, `timeline` | ⚠️ ¹ | ⚠️ ¹ |     ⚠️ ¹       | ❌ (readable source) |
 
-¹ `timeline` is still marked **experimental** upstream, and mindmap/timeline arrived only in
-Obsidian 1.4's mermaid 10 bundle. Old viewers show the fence as a code block rather than a
-picture — which is the graceful part: nothing is lost, it just isn't drawn.
+¹ Both are marked **experimental** upstream. In each case the core syntax is stable and only the
+icon integration is the experimental part — but the classification is theirs, not ours, so we
+inherit it. Both also arrived only in Obsidian 1.4's mermaid 10 bundle. Older viewers show the
+fence as a code block rather than a picture — which is the graceful part: nothing is lost, it
+just isn't drawn. The two used here are `mindmap` (in
+[06-ideas-and-pitches.md](06-ideas-and-pitches.md)) and `timeline` (in
+[05-states-journeys-time.md](05-states-journeys-time.md)).
 
 That last column is the reason the ❌ doesn't worry us. Mermaid source reads like an outline, so
 an agent grepping at speed still extracts every relationship without rendering anything.
