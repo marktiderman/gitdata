@@ -29,8 +29,8 @@ stateDiagram-v2
 
     note right of Finished
         Scores written exactly once here.
-        No transition leaves Finished —
-        results are immutable.
+        No business transition leaves Finished
+        (only termination) — results are immutable.
     end note
 ```
 

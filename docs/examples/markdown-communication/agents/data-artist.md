@@ -14,7 +14,7 @@ renders natively on GitHub.
 
 ## Stat tiles
 
-```
+```text
 ┌─────────────────┬─────────────────┬─────────────────┬─────────────────┐
 │  ACTIVE PLAYERS │  GAMES PLAYED   │  QUIZ ACCURACY  │  CRASH-FREE     │
 │      1,284      │      9,412      │      78.4%      │      99.2%      │

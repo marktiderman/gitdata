@@ -35,7 +35,8 @@ The weights are the argument. Put them in the doc and the debate moves from "I p
 | Approve schema changes    |  **A**   |   —   |    R     |   —    |
 | Enforce required checks   |    —     |   —   |    —     | **R**  |
 
-One letter per cell, one **A** per row. The last row is the GitDATA law in matrix form:
+One or more role letters per cell, with exactly one **A** per row. The last row is the GitDATA
+law in matrix form:
 enforcement is GitHub's job, nobody else's.
 
 ## 3. Coverage matrix (the honest checklist)

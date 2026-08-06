@@ -16,7 +16,7 @@ which is the point of lo-fi.
 
 ## Teacher dashboard — class overview
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ◤ Gamify   Classes ▾   Reports   Library              🔔  (MT) ▾    │ ← ①
 ├──────────────┬───────────────────────────────────────────────────────┤
@@ -48,7 +48,7 @@ which is the point of lo-fi.
 
 Two states, side by side, because the empty state *is* the design problem:
 
-```
+```text
    FIRST RUN (no class joined)             NORMAL (joined, race live)
 ┌─────────────────────────┐            ┌─────────────────────────┐
 │      ⛰  Gamify          │            │  Hi Ava!          🔥 12 │

@@ -13,7 +13,7 @@ students race from their phones, results roll up to a leaderboard. Same system, 
 
 ## Altitude 1 — Context & containers (C4-ish)
 
-**Claim: every mutation flows through the Heat Service; the leaderboard is a read-only projection and can never write back.**
+**Claim: every *external* heat mutation enters through the Heat Service — clients never write to the data plane directly, and the leaderboard is a read-only projection that can never write back.**
 
 ```mermaid
 flowchart LR
@@ -72,7 +72,7 @@ stateDiagram-v2
 
 **Claim: a stalled Scoring Worker produces a *plausible but frozen* leaderboard — the system's worst failures look like success.**
 
-```
+```text
   Student laps ──► Queue ──► [ SC stalled ✗ ] ──► Leaderboard Cache
                     │                                  │
                     │  events pile up,                 │  serves LAST GOOD standings

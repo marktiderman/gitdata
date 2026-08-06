@@ -9,10 +9,14 @@ tags: [examples, wireframes, diagrams, matrices]
 
 # Markdown as a communication medium
 
-Every example in this folder is a plain `.md` file that renders on GitHub, in Obsidian, and in
-the GitHub web editor with **zero tooling** — no image exports, no Figma links that rot, no
-binary blobs to diff. That is the GitDATA law applied to communication: the diagram *is* the
-source, it lives in git, and a PR diff shows exactly what changed.
+Every example in this folder is a plain `.md` file with **zero tooling** — no image exports, no
+Figma links that rot, no binary blobs to diff. That is the GitDATA law applied to communication:
+the diagram *is* the source, it lives in git, and a PR diff shows exactly what changed.
+
+The mermaid blocks render when *viewing* a committed file on GitHub and in Obsidian. Both bundle
+their own mermaid version, so support tracks their build, not the latest upstream release — and
+GitHub's web **editor** shows no live preview while you type, only after you commit. Everything
+non-mermaid here (frontmatter, tables, ASCII wireframes) is renderer-independent by construction.
 
 Each file carries structured frontmatter, so this folder is also a demo of docs-as-data: an
 agent can grep the `kind:` field and know what it is looking at before reading a single line
@@ -53,7 +57,17 @@ with structure, not prose — and designed their own examples independently:
 | ---------------------- | :----: | :------: | :-------------: | :------------: |
 | Tables / frontmatter   |   ✅   |    ✅    |       ✅        |   ✅ (as text) |
 | ASCII wireframes       |   ✅   |    ✅    |       ✅        |       ✅       |
-| Mermaid (all types)    |   ✅   |    ✅    |   ✅ (plugin)   | ❌ (readable source) |
+| Mermaid — stable types |   ✅   |    ✅    |   ✅ (plugin)   | ❌ (readable source) |
+| Mermaid — `timeline`   |  ⚠️ ¹  |   ⚠️ ¹   |     ⚠️ ¹       | ❌ (readable source) |
 
-Even the ❌ degrades gracefully: mermaid source reads like an outline, so an agent grepping at
-speed still extracts the relationships without rendering anything.
+¹ `timeline` is still marked **experimental** upstream, and mindmap/timeline arrived only in
+Obsidian 1.4's mermaid 10 bundle. Old viewers show the fence as a code block rather than a
+picture — which is the graceful part: nothing is lost, it just isn't drawn.
+
+That last column is the reason the ❌ doesn't worry us. Mermaid source reads like an outline, so
+an agent grepping at speed still extracts every relationship without rendering anything.
+
+**Verified, not assumed:** all 14 mermaid blocks in this folder were rendered locally with
+`@mermaid-js/mermaid-cli` (mermaid 11) before this was committed — 14/14 produced SVG. That
+proves the *syntax* is valid; it does not prove any particular viewer's bundled version will
+draw it, which is exactly what the ⚠️ row above is for.

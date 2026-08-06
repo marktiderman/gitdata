@@ -67,18 +67,23 @@ The narrowest structure that still counts as a pitch — every heading is a ques
 pitch that can't fill a heading isn't ready:
 
 > ### Problem
+>
 > Diagrams live outside git, so they rot silently and agents can't read them.
 >
 > ### Proposal
+>
 > Every diagram is mermaid or ASCII inside a frontmattered `.md`. Nothing binary.
 >
 > ### What we are NOT doing
+>
 > No diagram DSL. No rendering pipeline. No Figma migration mandate.
 >
 > ### First slice
+>
 > This folder. Cost: one PR. Reversal cost: `git revert`.
 >
 > ### How we'll know it worked
+>
 > Next design debate cites a diagram diff instead of a screenshot.
 
 The **NOT doing** section is the highest-value heading in the doc — scope stated as data,

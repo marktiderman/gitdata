@@ -47,7 +47,7 @@ The emotional floor never drops to 1. That's the whole design.
 
 What Maya sees when she returns after the camping trip:
 
-```
+```text
 +----------------------------------+
 |  YOUR GARDEN            [day 12] |
 |                                  |
