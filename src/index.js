@@ -20,7 +20,17 @@ export { init, listPacks, PackError } from "./init.js";
 // Check rows against data/_schema/<table>.schema.yml — opt-in, reports only, never blocks.
 export { validate, loadSchemas, SchemaSpecError } from "./validate.js";
 
+// The compliance verb: every check in one report, with the consumer's own severity policy applied.
+// CHECKS is the catalog (id + default level); readPolicy reads data/_gitdata.yml; exitCode holds
+// the --check/--strict contract in one place so nothing can drift from it.
+export { doctor, readPolicy, exitCode, CHECKS, CHECK_IDS, LEVELS, TABLE_CLASSES, POLICY_FILE, runCommands } from "./doctor.js";
+
+// Multi-store enumeration: every data/ trellis below a root, and what each one holds.
+export { findStores, describeStores } from "./stores.js";
+
 // Emit .github/CODEOWNERS from data/<table>/_owners.yml, or report drift without writing.
+// NOTE the semantic, which `doctor` warns about but does not change: emitCodeowners REPLACES the
+// whole output file (src/emit-codeowners.js:138). It does not merge, and it does not append.
 export { emitCodeowners, codeownersLines, renderCodeowners, EmitError } from "./emit-codeowners.js";
 
 // The pipeline, for consumers building their own tooling on top: markdown → tables → SQLite.
