@@ -149,7 +149,7 @@ export function where(clause) {
 /**
  * A column spec → a SQL expression producing its display text.
  *
- *   "id"                                          → "id"
+ *   "id"                                          → COALESCE(replace("id",'|','/'), '')
  *   { from: coord, wrap: "`{}`" }                 → '`' || "coord" || '`'
  *   { from: state, map: {done: shipped, "*": open} } → CASE WHEN ... END
  *   { from: body, section: "The job", truncate: 160 } → md_section("_body", 'The job') truncated
@@ -159,7 +159,20 @@ export function where(clause) {
  * says "the body".
  */
 export function column(spec) {
-  if (typeof spec === "string") return { expr: ident(spec), as: spec };
+  // The shorthand is the OBJECT FORM with no options, and must render identically. It used to
+  // return a bare identifier, which is not the same thing: `rowExpr` joins columns with `||`, and
+  // SQLite's `||` propagates NULL, so ONE null column nulled the whole line and the row rendered
+  // as a BLANK LINE inside the markdown table. The object form never had this — it wraps every
+  // expression in COALESCE.
+  //
+  // Latent before, systematic now. `where: {x: {not_in: [...]}}` admits rows precisely BECAUSE
+  // `x IS NULL`, so any view naming that same column in shorthand rendered those rows blank every
+  // single time. Making the filter null-tolerant while leaving the renderer null-hostile would
+  // have shipped a corrupt artifact by construction, which is why this rides here rather than in
+  // a follow-up. Found by an adversarial review, reproduced end to end through `rollup --check`.
+  if (typeof spec === "string") {
+    return { expr: `COALESCE(replace(${ident(spec)}, '|', '/'), '')`, as: spec };
+  }
 
   const { from, as, wrap, map, section, truncate, collapse, sanitize } = spec;
   if (!from) throw new ShapeError(`column spec needs "from": ${JSON.stringify(spec)}`);
