@@ -1,0 +1,122 @@
+# release-on-merge.yml — cut a release when a version bump lands on main.
+#
+# WHY THIS EXISTS. The release process was documented in exactly one place: a comment header in
+# release.yml. Nothing at the front door said it, so it was findable only by someone who already
+# knew to look — and the cost was paid immediately. 0.2.1 merged, 0.3.0 merged on top, and NEITHER
+# was tagged: two versions consumed, zero releases cut, npm still serving 0.2.0. A merged version
+# bump with no matching tag is a silent no-op, and silence is what this repo exists to end.
+#
+# WHY ONE WORKFLOW AND NOT TWO. The obvious shape is "tag here, let release.yml publish". It does
+# not work: a tag pushed with GITHUB_TOKEN does NOT trigger another workflow — GitHub suppresses
+# that to stop recursive runs. The tag would appear and nothing would publish, which is a WORSE
+# failure than today's, because the tag makes it look released.
+#
+# The escape hatch is a personal access token with push rights, and that is precisely what this
+# repo refuses: release.yml's header says "there is no NPM_TOKEN secret in this repo, deliberately"
+# because OIDC trusted publishing mints a short-lived token instead. Adding a long-lived PAT to
+# automate around that would reintroduce the exact credential the design removed. So this workflow
+# tags AND publishes in one job, over OIDC, with no secret of any kind.
+#
+# release.yml is UNCHANGED and still works: push a `v*` tag by hand and it publishes. That path is
+# the manual override — for a re-release, or for cutting a version from a commit that is not main's
+# head. This workflow is the automatic path for the ordinary case.
+name: Release on merge
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never cancel a half-finished publish, and never run two. npm versions are immutable; a race
+  # that publishes twice cannot be undone, only deprecated.
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: publish if the version changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # to push the tag
+      id-token: write # REQUIRED for OIDC Trusted Publishing — scoped to this job only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Two commits is all the diff below needs, but tags are needed to answer "already
+          # released?" — and a shallow clone has none of them.
+          fetch-depth: 0
+          persist-credentials: true # the tag push below uses the checkout credential
+
+      # THE GATE. Three ways to decide there is nothing to do, in increasing cost:
+      #   1. package.json's version is unchanged from the previous commit  -> ordinary merge
+      #   2. a tag for that version already exists                          -> re-run, or hand-tagged
+      # Either one exits the job cleanly. Only a genuine, un-released bump proceeds.
+      - name: Decide whether this is a release
+        id: gate
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          PREV="$(git show HEAD^:package.json 2>/dev/null | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version" 2>/dev/null || echo "none")"
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "  this commit: $VERSION"
+          echo "  previous:    $PREV"
+
+          if [ "$VERSION" = "$PREV" ]; then
+            echo "  version unchanged — not a release"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "  tag v$VERSION already exists — already released"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "  v$VERSION is a new version with no tag — releasing"
+          echo "release=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.gate.outputs.release == 'true'
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org # writes the .npmrc npm publish reads
+
+      # OIDC Trusted Publishing needs npm >= 11.5.1; Node 22 bundles 10.x. Pinned exactly, for the
+      # same reason release.yml pins it: the 11.5.x tarballs shipped an arborist missing
+      # promise-retry, and an exact pin makes the next bump a reviewable Dependabot diff rather
+      # than something that lands silently on a release run.
+      - name: Ensure npm supports OIDC Trusted Publishing
+        if: steps.gate.outputs.release == 'true'
+        run: npm install -g npm@11.6.0
+
+      - name: Install
+        if: steps.gate.outputs.release == 'true'
+        run: npm ci
+
+      # Publishing untested code is how a broken release reaches consumers. Same suite CI runs.
+      # This is the LAST gate before an irreversible act, so it runs before the tag is created —
+      # a tag pointing at a red commit is a lie that outlives the run.
+      - name: Test
+        if: steps.gate.outputs.release == 'true'
+        run: npm test
+
+      - name: Tag
+        if: steps.gate.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ steps.gate.outputs.version }}" -m "release: v${{ steps.gate.outputs.version }}"
+          git push origin "v${{ steps.gate.outputs.version }}"
+
+      # Publishes AFTER the tag, so a publish failure leaves a tag to retry from rather than a
+      # published version with nothing in git pointing at it. No --access flag needed:
+      # publishConfig.access lives in package.json, keeping the setting with the package.
+      # Provenance comes free with trusted publishing.
+      - name: Publish
+        if: steps.gate.outputs.release == 'true'
+        run: npm publish
