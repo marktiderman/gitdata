@@ -51,8 +51,11 @@ gitdata init --pack feature-management   # scaffold tables, templates and a boar
 gitdata rollup                           # regenerate every view
 gitdata rollup --check                   # compile in memory, report drift, write nothing
 gitdata validate                         # check rows against data/_schema/*.schema.yml
+gitdata doctor                           # one compliance report — always exits 0
+gitdata doctor --check                   # the one CI line: exit 1 on any error finding
 gitdata emit codeowners                  # write .github/CODEOWNERS from data/*/_owners.yml
 gitdata emit codeowners --check          # report drift, write nothing
+gitdata stores                           # every data/ trellis in the repo, and what is in it
 gitdata packs                            # what's available to install
 ```
 
@@ -156,9 +159,37 @@ another table's column) are all the vocabulary the engine knows — same as SQL 
 never gets added here. What columns get which rules is your call, declared in your schema, never
 baked into gitdata itself.
 
+## One CI line: `doctor`
+
+`rollup --check` and `validate` each answer one question and each need their own CI step. `doctor`
+folds them in — as findings `GD109` and `GD110` — alongside the checks nothing could make before:
+is the engine pinned, does the lockfile agree with the manifest, does an installed pack's engine
+range still admit the engine that is running, does a generated artifact land somewhere the loader
+will read back as a row.
+
+```bash
+gitdata doctor            # report. ALWAYS exits 0 — safe in a dev shell
+gitdata doctor --check    # exit 1 if any finding is an error
+gitdata doctor --strict   # --check, and warnings count too
+```
+
+Every check has a stable public ID. You may lower any of them in `data/_gitdata.yml`, but lowering
+one requires a written `reason:`, and every lowered check is reprinted in a **silenced by policy**
+block with that reason. A tool you cannot tell "we meant that" gets ignored; one that records *why*
+keeps the divergence visible and attributed instead of silent.
+
+```yaml
+engine: ">=0.3.0"
+checks:
+  GD103: { level: off, reason: "generated artifacts live elsewhere by design" }
+```
+
+A check that could not run is never reported as passing — it prints under **not checked** with the
+gap named. The full catalog, every default severity, and the store taxonomy: **[docs/DOCTOR.md](docs/DOCTOR.md)**.
+
 ## Status
 
-`init`, `rollup`, `validate`, and `emit codeowners` are built.
+`init`, `rollup`, `validate`, `doctor`, `stores`, and `emit codeowners` are built.
 
 `emit codeowners` reads `data/<table>/_owners.yml` and writes `.github/CODEOWNERS` — a table with
 no `_owners.yml` gets no line; ownership is opt-in, never inferred:

@@ -24,6 +24,7 @@ import { describe, test } from "node:test";
 
 import { parse as parseYaml } from "yaml";
 
+import { CHECKS } from "../src/doctor.js";
 import { SHAPES } from "../src/shapes/index.js";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -54,7 +55,7 @@ const packDirs = () =>
     : [];
 
 /** Public prose that a new reader meets first. Vocabulary leaks here as readily as in code. */
-const PUBLIC_DOCS = ["README.md", "SHAPES.md", "CONTRIBUTING.md", "docs/ARCHITECTURE.md"];
+const PUBLIC_DOCS = ["README.md", "SHAPES.md", "CONTRIBUTING.md", "docs/ARCHITECTURE.md", "docs/DOCTOR.md"];
 
 /**
  * Words that name somebody's data rather than a mechanism. A consumer's vocabulary in the engine
@@ -140,6 +141,36 @@ describe("layer boundaries", () => {
       .map((line) => /^\|\s*`(\w+)`\s*\|/.exec(line)?.[1])
       .filter(Boolean);
     assert.deepEqual(documented.sort(), Object.keys(SHAPES).sort());
+  });
+
+  test("docs/DOCTOR.md documents exactly the registered checks", () => {
+    // Same ratchet as SHAPES.md above, for the same reason. A check id is a PUBLIC name: a
+    // consumer writes it into their own policy file to lower a severity, so an id that no
+    // document explains is one they can only discover by reading our source — and a documented
+    // id the engine does not register is a suppression that silently does nothing.
+    const documented = readFileSync(join(REPO, "docs/DOCTOR.md"), "utf8")
+      .split("\n")
+      .map((line) => /^\|\s*`(GD\d{3})`\s*\|/.exec(line)?.[1])
+      .filter(Boolean);
+    assert.deepEqual(documented.sort(), CHECKS.map((c) => c.id).sort());
+  });
+
+  test("every check's default severity is documented, and every id is unique", () => {
+    // The default level is half of what the id means: "lowering requires a reason" is only
+    // legible if a reader can see what it is being lowered FROM.
+    const doc = readFileSync(join(REPO, "docs/DOCTOR.md"), "utf8");
+    const seen = new Set();
+    for (const check of CHECKS) {
+      assert.ok(!seen.has(check.id), `duplicate check id ${check.id}`);
+      seen.add(check.id);
+      const row = doc.split("\n").find((l) => l.startsWith(`| \`${check.id}\` |`));
+      assert.ok(row, `docs/DOCTOR.md has no catalog row for ${check.id}`);
+      assert.match(
+        row,
+        new RegExp(`\\|\\s*${check.name}\\s*\\|\\s*${check.level}\\s*\\|`),
+        `docs/DOCTOR.md row for ${check.id} disagrees with the registry (${check.name}, ${check.level})`,
+      );
+    }
   });
 
   test("bundled pack views declare shapes, not SQL", () => {

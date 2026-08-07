@@ -9,10 +9,12 @@
 import { readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 
+import { doctor, exitCode } from "./doctor.js";
 import { emitCodeowners } from "./emit-codeowners.js";
 import { init, listPacks } from "./init.js";
 import { describeTables, runQuery } from "./introspect.js";
 import { diffLines, formatDiff, rollup } from "./rollup.js";
+import { describeStores } from "./stores.js";
 import { validate } from "./validate.js";
 
 const USAGE = `gitdata — docs as data in git
@@ -21,8 +23,11 @@ const USAGE = `gitdata — docs as data in git
   gitdata rollup [--check] [--diff] [--json] [--root <dir>]
                                                           regenerate views | report drift without writing
   gitdata validate [--root <dir>]                        check rows against data/_schema/*.schema.yml
+  gitdata doctor [--check] [--strict] [--json] [--offline] [--root <dir>]
+                                                          one compliance report: engine, install, drift, schemas
   gitdata emit codeowners [--check] [--root <dir>] [--out <path>]
                                                           emit .github/CODEOWNERS from data/*/_owners.yml
+  gitdata stores [--json] [--root <dir>]                 every data/ trellis below <dir>, and what is in it
   gitdata tables [--json] [--root <dir>]                 list tables, columns, inferred types, row counts
   gitdata query "<SQL>" [--json] [--root <dir>]
                                                           run a read-only SQL statement against the projection
@@ -31,18 +36,23 @@ const USAGE = `gitdata — docs as data in git
 Options:
   --root <dir>   repo root (default: cwd). Data lives in <root>/data.
   --check        report drift without writing; exits non-zero if anything drifted or is missing.
+                 doctor: exit 1 if any finding is an error. Without it, doctor always exits 0.
+  --strict       doctor: --check, plus warnings count as failures. No effect elsewhere.
+  --offline      doctor: skip the one check that contacts the registry (GD004).
   --diff         with --check: print the line diff for each drifted/missing view. No effect
                  without --check; a normal rollup writes, it does not compare.
-  --json         with --check, tables, or query: emit structured output instead of a plain-text
-                 listing. No effect on --check without --check itself. Combine with --diff to
-                 include diff content in --check's report.
+  --json         with --check, doctor, stores, tables, or query: emit structured output instead
+                 of a plain-text listing. Combine with --diff to include diff content in
+                 --check's report.
   --out <path>   emit codeowners: output path (default: <root>/.github/CODEOWNERS)
+
+The doctor check catalog, with every ID and its default severity: docs/DOCTOR.md
 `;
 
 // Boolean flags recognized anywhere in argv, and the value-taking flags with where their value
 // lands in `args`. Kept in one place so positional-argument extraction (`rest`, below) knows
 // exactly what to skip past — `query`'s SQL text is the one positional argument any command takes.
-const BOOL_FLAGS = ["--check", "--diff", "--json"];
+const BOOL_FLAGS = ["--check", "--diff", "--json", "--strict", "--offline"];
 const VALUE_FLAGS = [["--root", "root"], ["--pack", "pack"], ["--out", "out"]];
 
 function parseArgs(argv) {
@@ -56,6 +66,9 @@ function parseArgs(argv) {
     check: argv.includes("--check"),
     diff: argv.includes("--diff"),
     json: argv.includes("--json"),
+    // --strict IS --check plus a wider net; a consumer who types only --strict means to gate.
+    strict: argv.includes("--strict"),
+    offline: argv.includes("--offline"),
     root: process.cwd(),
     pack: null,
     out: null,
@@ -192,6 +205,73 @@ function cmdValidate({ root }) {
   return 0;
 }
 
+const MARK = { error: "✗", warn: "!", off: "·" };
+
+/**
+ * `doctor` — one report, one exit code, and a trailing block naming every check the consumer's
+ * own policy lowered, with the reason they gave for lowering it. A divergence that is deliberate
+ * stays visible and attributed; a divergence nobody explained is itself a finding (GD000).
+ */
+async function cmdDoctor({ root, check, strict, json, offline }) {
+  const report = await doctor({ root, offline });
+  const status = exitCode(report.summary, { check, strict });
+
+  if (json) {
+    console.log(JSON.stringify({ ...report, exit: status }, null, 2));
+    return status;
+  }
+
+  for (const f of report.findings) {
+    console.log(`  ${MARK[f.level]} ${f.id}  ${(f.where ?? "").padEnd(34)} ${f.message}`);
+  }
+  if (report.findings.length === 0) console.log(`  · nothing to report across ${report.checked} check(s).`);
+
+  // UNKNOWN is printed, never blanked: a check that could not run says so and names the gap.
+  if (report.skipped.length > 0) {
+    console.log("\n  not checked:");
+    for (const s of report.skipped) console.log(`    ${s.id}  ${s.reason}`);
+  }
+
+  if (report.silenced.length > 0) {
+    console.log("\n  silenced by policy:");
+    for (const s of report.silenced) {
+      const hits = s.findings === 0 ? "no findings" : `${s.findings} finding(s)`;
+      console.log(`    ${s.id}  ${s.from} → ${s.level.padEnd(5)} ${hits.padEnd(14)} ${s.reason ?? "(no reason given)"}`);
+    }
+  }
+
+  const { error, warn, off } = report.summary;
+  console.log(`\n  ${error} error(s), ${warn} warning(s), ${off} silenced across ${report.checked} check(s).`);
+  if (status === 0 && (check || strict)) console.log("  doctor passed.");
+  if (status !== 0) console.log(`  doctor failed — ${strict ? "--strict counts warnings" : "--check counts errors"}.`);
+  return status;
+}
+
+/** `stores` — the master table of contents across every trellis in a repo. Reports, never writes. */
+function cmdStores({ root, json }) {
+  const stores = describeStores(root);
+
+  if (json) {
+    console.log(JSON.stringify(stores, null, 2));
+    return 0;
+  }
+  if (stores.length === 0) {
+    console.log("  no stores found — a store is a directory holding a data/ trellis");
+    return 0;
+  }
+  for (const store of stores) {
+    const manifest = store.manifest ? `_gitdata.yml${store.engine ? ` · engine ${store.engine}` : ""}` : "no manifest";
+    console.log(`${store.data}  (${manifest})`);
+    for (const t of store.tables) {
+      const rows = t.rows === null ? "declared, no directory" : `${t.rows} row${t.rows === 1 ? "" : "s"}`;
+      console.log(`  ${t.name.padEnd(24)} ${String(t.class ?? "UNKNOWN").padEnd(10)} ${rows}`);
+    }
+    console.log("");
+  }
+  console.log(`  ${stores.length} store(s).`);
+  return 0;
+}
+
 async function cmdEmitCodeowners({ root, check, out }) {
   const outPath = resolve(root, out ?? ".github/CODEOWNERS");
   const result = emitCodeowners({ dataRoot: resolve(root, "data"), repoRoot: root, outPath, check });
@@ -275,6 +355,8 @@ try {
   if (args.command === "rollup") process.exit(await cmdRollup(args));
   if (args.command === "init") process.exit(cmdInit(args));
   if (args.command === "validate") process.exit(cmdValidate(args));
+  if (args.command === "doctor") process.exit(await cmdDoctor(args));
+  if (args.command === "stores") process.exit(cmdStores(args));
   if (args.command === "emit" && args.sub === "codeowners") process.exit(await cmdEmitCodeowners(args));
   if (args.command === "packs") process.exit(cmdPacks());
   if (args.command === "tables") process.exit(await cmdTables(args));

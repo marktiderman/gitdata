@@ -97,6 +97,48 @@ this does *not* do, on purpose: it never edits branch protection, never adds req
 never blocks a merge. It only ever reads `data/` and writes one file — turning that file into an
 enforced gate is a GitHub repo setting, made by a human, every time.
 
+One thing to know before adopting it: `emit codeowners` **replaces** the output file entirely. It
+does not merge and it does not append, so a repo whose `.github/CODEOWNERS` holds hand-authored
+rules loses them on the first run. Emit to a different path with `--out` and merge deliberately.
+
+## `doctor`: the conventions, made mechanical
+
+`validate` checks that ROWS hold up. Nothing checked whether the repo AROUND them follows the
+conventions — the engine unpinned, the lockfile disagreeing with the manifest, a pack's `requires:`
+range excluding the engine that is running, a generated artifact landing where the loader reads it
+back as a row. Those conventions lived in prose, and prose is not a check.
+
+`gitdata doctor` is one report over all of it, and it **delegates rather than duplicates**:
+`rollup --check` arrives as `GD109` and `validate` as `GD110`, so a consumer wires one CI line and
+there is no second copy of either behaviour to drift. Rule 5 still holds — with no flags it always
+exits 0; `--check` and `--strict` are the opt-ins that let a consumer make it blocking. Nothing
+`doctor` runs writes anywhere.
+
+Every check has a stable public ID and a default severity. A consumer may lower any of them in
+`data/_gitdata.yml`, but **lowering requires a `reason:`**, and every lowered check is reprinted
+with that reason. The asymmetry is the design: a check nobody has to explain away is a check that
+quietly stops mattering. A check that could not run prints as UNCHECKED, never as a pass.
+
+The engine still names nothing. Where a check needs domain vocabulary — which columns count as
+provenance for a machine-written table — the consumer names them in their own manifest, and the
+engine only verifies that what they named carries a value.
+
+The catalog, and the reasoning behind each check: [DOCTOR.md](DOCTOR.md).
+
+## Stores
+
+A **store** is a directory holding a `data/` trellis. Every other verb is single-store; a repo with
+several has no way to see them together, and what cannot be enumerated cannot be audited.
+`gitdata stores` walks for them and prints one table of contents, with each table's declared class:
+**authored** by hand, **measured** by a machine that rewrites it wholesale, or **derived** — rollup
+output, never rows at all.
+
+There is **one** config file, not two. A store manifest and a severity policy would both answer
+"what does gitdata know about this store", and both would carry `engine:` — two documents that
+overlap is the state where nobody can tell which one wins. So they are the same file,
+`data/_gitdata.yml`, inside a namespace gitdata already owns and the loader already skips. A store
+that never adopted one is still enumerated; what only the manifest can say reads UNKNOWN.
+
 ## Packs and versioning
 
 A pack declares its version and the engine range it works against:
