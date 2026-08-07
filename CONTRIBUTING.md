@@ -70,3 +70,24 @@ fix is almost never to widen the test.
   reader would otherwise simplify back into a bug.
 - Errors name the file, the field, and what was expected.
 - No new dependencies without a reason in the PR description.
+
+## Cutting a release
+
+**Bump `version` in `package.json`, merge to `main`, and that is the whole process.**
+`.github/workflows/release-on-merge.yml` notices the change, runs the suite, tags `v<version>`, and
+publishes over OIDC trusted publishing. There is no NPM_TOKEN in this repo and there should never
+be one — npm mints a short-lived token from this repository's own identity.
+
+- **Do not run `npm version patch`** once the bump is merged. It would bump *again* and skip the
+  version you meant to ship.
+- **A merged bump with no release is silent.** That is what the workflow exists to stop: `0.2.1`
+  and `0.3.0` both merged before it existed, neither was tagged, and npm went on serving `0.2.0`
+  with nothing reporting the gap.
+- **Publishing is irreversible.** npm versions are immutable; a wrong publish can be deprecated,
+  never replaced.
+
+`.github/workflows/release.yml` still publishes from a hand-pushed `v*` tag. That is the manual
+override — for a re-release, or to cut a version from a commit that is not `main`'s head.
+
+Which number: **patch** for a fix, **minor** for a new command or a new dependency. `0.2.1` for the
+`where:` fix and `0.3.0` for `doctor` + `stores` are the worked examples.
