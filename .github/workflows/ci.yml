@@ -38,3 +38,20 @@ jobs:
 
       - run: npm ci
       - run: npm test
+
+      # DOGFOOD. The tool, run on the tool's own store, using THIS COMMIT's source rather than a
+      # published version. That is the point: a released version lags by definition, so gating on
+      # one would test what we shipped last time instead of what we are shipping now. `node
+      # src/cli.js` is always the newest gitdata that exists.
+      #
+      # It is also the only gate here that reads `data/`. `npm test` builds its own fixture repos
+      # in temp dirs and never touches this repo's rows, so without these two lines gitdata's own
+      # store could rot exactly the way a consumer's does — and we would be shipping a drift gate
+      # while carrying undetected drift.
+      #
+      # Run bare, exit code read directly. Not piped: `$?` after a pipeline is the pipe's status,
+      # not the command's, which is how a green gate over a red command happens.
+      - name: Dogfood — this repo's own store passes its own gates
+        run: |
+          node src/cli.js validate --root .
+          node src/cli.js rollup --check --root .
