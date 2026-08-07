@@ -24,7 +24,7 @@ queries:
       # `empty:` is declared on purpose. A section that vanishes when it has no rows is right for
       # a board of work in flight; for ideas, "nothing here" is information — it says the backlog
       # is genuinely empty rather than that the query broke.
-      - heading: ["", "## Open"]
+      - heading: ["", "## Open", ""]
         from: ideas
         where: { state: open }
         order: { by: id }
@@ -35,7 +35,7 @@ queries:
           - { from: raised, collapse: true, truncate: 90, as: raised }
         empty: "| — | nothing open | — | — |"
 
-      - heading: ["", "## Became work"]
+      - heading: ["", "## Became work", ""]
         from: ideas
         where: { state: became }
         order: { by: id }
@@ -46,7 +46,7 @@ queries:
           - { from: solves, collapse: true, truncate: 110, as: solves }
         empty: "| — | nothing yet | — | — |"
 
-      - heading: ["", "## Declined"]
+      - heading: ["", "## Declined", ""]
         from: ideas
         where: { state: declined }
         order: { by: id }

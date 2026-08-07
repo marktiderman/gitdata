@@ -17,7 +17,7 @@ created: 2026-08-07
 
 Measured, not inferred. A scratch store with one row, no `_schema/` and no `_views/`:
 
-```
+```console
 $ gitdata validate --root .
   no schemas found — add data/_schema/<table>.schema.yml
 validate exit=0

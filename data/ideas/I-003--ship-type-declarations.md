@@ -17,7 +17,7 @@ created: 2026-08-07
 
 Measured against the published tarball, not the working tree:
 
-```
+```console
 $ npm pack @marktiderman/gitdata@0.2.0
 --- .d.ts count in published 0.2.0: 0 ---
 
@@ -31,7 +31,7 @@ The irony is the argument. PR #11 exported the row contract specifically so cons
 reimplementing it, and `doctor`'s GD112 check nags them when they do. A real consumer followed that
 advice in TypeScript:
 
-```
+```text
 scripts/verify-game-registration.ts(148,27): error TS7016:
   Could not find a declaration file for module '@marktiderman/gitdata/load'.
 ```

@@ -22,7 +22,7 @@ PR #15.
 
 Measured on five rows, one per spelling of empty plus one genuinely populated:
 
-```
+```text
 {parent: null}        => ("parent" IS NULL OR "parent" IN ('null','None','')) => ["a","b","c","d"]
 {parent: {not: null}} => "parent" IS NOT 'null'                               => ["a","c","d","e"]
 ```
