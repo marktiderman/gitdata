@@ -1,13 +1,34 @@
 # GitDATA guides. GitHub enforces. This file is the enforcement half — the project dogfooding
 # its own law (north star #5: permissions via GitHub's out-of-the-box features).
 #
-# NOTE: CODEOWNERS only binds once branch protection (or a ruleset) on main requires
-# code-owner review. Repo settings, not files, flip that switch.
+# CODEOWNERS only binds once a ruleset on main requires code-owner review. Repo settings, not
+# files, flip that switch — and it is now flipped, so every line below is live.
+#
+# ---------------------------------------------------------------------------------------------
+# THERE IS DELIBERATELY NO `* @owner` CATCH-ALL. Do not add one back.
+#
+# A catch-all makes the sole code owner the only approver for EVERY pull request. Two things then
+# follow, and the second one is the trap:
+#
+#   1. A review bot can no longer clear a PR. Its approval still counts toward "Required
+#      approvals", but code-owner review is a SEPARATE gate that a non-owner cannot satisfy.
+#   2. GitHub forbids approving your own pull request. On a solo repo the sole code owner is also
+#      the author of nearly every PR — so the gate is unsatisfiable BY THE ONLY PERSON WHO COULD
+#      SATISFY IT. Every PR is then permanently blocked, or permanently admin-bypassed. Neither
+#      is a gate; one is a wall and the other is theatre.
+#
+# So ownership here is NARROW on purpose: it names the handful of files where a human decision is
+# the point, and stays silent everywhere else. Routine work is cleared by review; the files below
+# are not routine.
+#
+# Adding a path here has a real cost — it makes that path unmergeable without the owner, including
+# when the owner wrote it. That cost is worth paying for a document that governs how the project
+# thinks. It is not worth paying for code, which is what tests and review are for.
+# ---------------------------------------------------------------------------------------------
 
-# Everything, by default.
-* @marktiderman
-
-# The operator-authored north star and the laws. CLAUDE.md says "edited only by the operator" —
-# this is the line that makes GitHub able to enforce it.
+# The operator-authored north star and the laws. CLAUDE.md says the north star block is "edited
+# only by the operator" — this is the line that lets GitHub enforce the claim rather than trust it.
 /CLAUDE.md @marktiderman
+
+# The front door. Every reader's first and often only impression of what this is.
 /README.md @marktiderman
