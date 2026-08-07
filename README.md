@@ -59,6 +59,18 @@ gitdata stores                           # every data/ trellis in the repo, and 
 gitdata packs                            # what's available to install
 ```
 
+Tables live in `<root>/data`. A repo that needs a **second** store says where with `--data`:
+
+```bash
+gitdata rollup --data data/generated     # tables at data/generated/, not data/generated/data/
+```
+
+Every command that reads tables takes it, so no two of them can disagree about what the data is.
+Reach for it when one set of rows is hand-authored and another is rewritten wholesale by a
+generator: a single `rollup` regenerating both is wrong, and separate roots is how you say so.
+`--root` keeps its other jobs either way — it stays the boundary a view's `out:` may not escape,
+and where `emit codeowners` writes and anchors its patterns.
+
 Start from nothing in one command:
 
 ```bash

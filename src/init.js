@@ -11,7 +11,7 @@
  *                moment they land; editing them is the point, not a fork.
  */
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parse as parseYaml } from "yaml";
@@ -36,8 +36,18 @@ function walk(dir, base = dir) {
   });
 }
 
-/** What a bare `data/` needs to exist, be committable, and explain itself. */
-const BARE_README = `# data/
+/**
+ * What a bare data root needs to exist, be committable, and explain itself.
+ *
+ * Every path is written out of the root the caller actually chose, because this file's whole job
+ * is to tell the next reader where their rows go. Hard-coding `data/` here would hand a second,
+ * separately-owned store a README that describes the first one — and the reader who follows it
+ * puts their rows in somebody else's table.
+ *
+ * `at` is the data root relative to the repo, and `run` is the flag needed to reach it (empty for
+ * the default root, which every command already finds on its own).
+ */
+const bareReadme = (at, run) => `# ${at}/
 
 The gitdata trellis for this repo.
 
@@ -49,13 +59,13 @@ table's columns. Files and folders prefixed with \`_\` are never rows (\`_templa
 
 Add a table by making a folder and putting a row in it — no declaration step:
 
-    mkdir -p data/things
-    printf -- '---\\nid: T-001\\ntitle: First thing\\n---\\n' > data/things/T-001--first.md
+    mkdir -p ${at}/things
+    printf -- '---\\nid: T-001\\ntitle: First thing\\n---\\n' > ${at}/things/T-001--first.md
 
-Add a view by writing \`data/_views/<id>.view.yml\`, then:
+Add a view by writing \`${at}/_views/<id>.view.yml\`, then:
 
-    gitdata rollup          # regenerate every view
-    gitdata rollup --check  # CI: fail if an artifact drifted from its sources
+    gitdata rollup${run}          # regenerate every view
+    gitdata rollup${run} --check  # CI: fail if an artifact drifted from its sources
 
 A generated artifact is never hand-edited — \`rollup --check\` exists to catch exactly that.
 `;
@@ -68,14 +78,19 @@ A generated artifact is never hand-edited — \`rollup --check\` exists to catch
  * table list to get started. Without this, `init` demanded `--pack` and the only paths into
  * gitdata were another repo's content model or hand-made folders.
  */
-function initBare(root) {
+function initBare(repoRoot, dataDir) {
+  // The paths this README prints are shell commands somebody will paste, so they are spelled with
+  // `/` whatever the platform's separator is.
+  const at = relative(repoRoot, dataDir).split(sep).join("/");
+  const run = dataDir === join(repoRoot, "data") ? "" : ` --data ${at}`;
+
   const written = [];
   const skipped = [];
   for (const [rel, body] of [
-    ["data/README.md", BARE_README],
-    ["data/_views/.gitkeep", ""],
+    [join(at, "README.md"), bareReadme(at, run)],
+    [join(at, "_views", ".gitkeep"), ""],
   ]) {
-    const dest = join(resolve(root), rel);
+    const dest = join(repoRoot, rel);
     if (existsSync(dest)) {
       skipped.push(rel);
       continue;
@@ -88,11 +103,15 @@ function initBare(root) {
 }
 
 /**
- * @param {{root: string, pack?: string|null}} opts
+ * @param {{root: string, pack?: string|null, dataRoot?: string|null}} opts `dataRoot` defaults to
+ *   `<root>/data`; a relative value resolves against `root`.
  * @returns {{pack: string|null, written: string[], skipped: string[]}}
  */
-export function init({ root, pack }) {
-  if (!pack) return initBare(root);
+export function init({ root, pack, dataRoot = null }) {
+  const repoRoot = resolve(root);
+  const dataDir = dataRoot === null ? join(repoRoot, "data") : resolve(repoRoot, dataRoot);
+
+  if (!pack) return initBare(repoRoot, dataDir);
 
   const packDir = join(PACKS_DIR, pack);
   if (!existsSync(join(packDir, "pack.yml"))) {
@@ -102,12 +121,28 @@ export function init({ root, pack }) {
     );
   }
 
+  // A pack's `files/` tree is copied VERBATIM — that is the guarantee that lets a consumer read
+  // the pack in this repo and know exactly what will land. Every path in it, the prose inside its
+  // README and template, and its view spec's `out:` all say `data/`, so honouring a different data
+  // root here would mean rewriting shipped content, which `init` does not do. Copying it unchanged
+  // is worse than refusing: the tables would land under the chosen root while the view spec beside
+  // them still wrote its artifact under `data/`, and a second pack installed at a third root would
+  // declare the same `out:` and silently overwrite the first one's board. Scaffold the root bare
+  // (`init --data <dir>` with no pack) and write the view against it.
+  if (dataDir !== join(repoRoot, "data")) {
+    throw new PackError(
+      `a pack installs into <root>/data — it cannot be combined with a different data root (${relative(repoRoot, dataDir)}). ` +
+        "Its files, prose and view `out:` name `data/` and are copied verbatim. " +
+        "Run `init` without --pack to scaffold that root bare.",
+    );
+  }
+
   const filesDir = join(packDir, "files");
   const written = [];
   const skipped = [];
 
   for (const rel of walk(filesDir).sort()) {
-    const dest = join(resolve(root), rel);
+    const dest = join(repoRoot, rel);
     if (existsSync(dest)) {
       skipped.push(rel);
       continue;
@@ -119,15 +154,15 @@ export function init({ root, pack }) {
 
   // A table folder with no rows yet must survive `git add`, or the trellis vanishes on clone.
   for (const table of parseYaml(readFileSync(join(packDir, "pack.yml"), "utf8")).tables ?? []) {
-    const keep = join(resolve(root), "data", table, ".gitkeep");
+    const keep = join(dataDir, table, ".gitkeep");
     if (!existsSync(keep)) {
       mkdirSync(dirname(keep), { recursive: true });
       writeFileSync(keep, "");
-      written.push(relative(resolve(root), keep));
+      written.push(relative(repoRoot, keep));
     } else {
       // Re-runs must account for every file the first run wrote, or "0 written, 3 left alone"
       // silently loses one from the books.
-      skipped.push(relative(resolve(root), keep));
+      skipped.push(relative(repoRoot, keep));
     }
   }
 

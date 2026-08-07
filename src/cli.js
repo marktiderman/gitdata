@@ -7,7 +7,7 @@
  * theirs, not ours.
  */
 import { readFileSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 
 import { doctor, exitCode } from "./doctor.js";
 import { emitCodeowners } from "./emit-codeowners.js";
@@ -19,22 +19,34 @@ import { validate } from "./validate.js";
 
 const USAGE = `gitdata — docs as data in git
 
-  gitdata init [--pack <name>] [--root <dir>]           scaffold data/ — bare, or from a pack
-  gitdata rollup [--check] [--diff] [--json] [--root <dir>]
+  gitdata init [--pack <name>] [--root <dir>] [--data <dir>]
+                                                          scaffold the data root — bare, or from a pack
+  gitdata rollup [--check] [--diff] [--json] [--root <dir>] [--data <dir>]
                                                           regenerate views | report drift without writing
-  gitdata validate [--root <dir>]                        check rows against data/_schema/*.schema.yml
-  gitdata doctor [--check] [--strict] [--json] [--offline] [--root <dir>]
+  gitdata validate [--root <dir>] [--data <dir>]         check rows against <data>/_schema/*.schema.yml
+  gitdata doctor [--check] [--strict] [--json] [--offline] [--root <dir>] [--data <dir>]
                                                           one compliance report: engine, install, drift, schemas
-  gitdata emit codeowners [--check] [--root <dir>] [--out <path>]
-                                                          emit .github/CODEOWNERS from data/*/_owners.yml
+  gitdata emit codeowners [--check] [--root <dir>] [--data <dir>] [--out <path>]
+                                                          emit .github/CODEOWNERS from <data>/*/_owners.yml
   gitdata stores [--json] [--root <dir>]                 every data/ trellis below <dir>, and what is in it
-  gitdata tables [--json] [--root <dir>]                 list tables, columns, inferred types, row counts
-  gitdata query "<SQL>" [--json] [--root <dir>]
+  gitdata tables [--json] [--root <dir>] [--data <dir>]  list tables, columns, inferred types, row counts
+  gitdata query "<SQL>" [--json] [--root <dir>] [--data <dir>]
                                                           run a read-only SQL statement against the projection
   gitdata packs                                          list available packs
 
 Options:
-  --root <dir>   repo root (default: cwd). Data lives in <root>/data.
+  --root <dir>   repo root (default: cwd). Data lives in <root>/data unless --data says otherwise.
+                 --root is always the repo: the boundary a view's "out:" may not escape, the base
+                 relative paths resolve against, and where CODEOWNERS is written and its patterns
+                 are anchored. --data changes where the tables are read from, and nothing else.
+  --data <dir>   the directory holding the tables (default: <root>/data), relative to --root or
+                 absolute, and it must sit inside --root. For a repo that needs a SECOND store
+                 beside the one it already has — a machine-owned table set that a generator
+                 rewrites wholesale must not share a root with hand-authored rows, because one
+                 rollup regenerating both is wrong. --data data/generated reads and writes tables
+                 at data/generated/; --root data/generated would have put them at
+                 data/generated/data/ and moved the repo root somewhere that is not the repo
+                 root. Not accepted with \`init --pack\`.
   --check        report drift without writing; exits non-zero if anything drifted or is missing.
                  doctor: exit 1 if any finding is an error. Without it, doctor always exits 0.
   --strict       doctor: --check, plus warnings count as failures. No effect elsewhere.
@@ -53,7 +65,7 @@ The doctor check catalog, with every ID and its default severity: docs/DOCTOR.md
 // lands in `args`. Kept in one place so positional-argument extraction (`rest`, below) knows
 // exactly what to skip past — `query`'s SQL text is the one positional argument any command takes.
 const BOOL_FLAGS = ["--check", "--diff", "--json", "--strict", "--offline"];
-const VALUE_FLAGS = [["--root", "root"], ["--pack", "pack"], ["--out", "out"]];
+const VALUE_FLAGS = [["--root", "root"], ["--data", "data"], ["--pack", "pack"], ["--out", "out"]];
 
 function parseArgs(argv) {
   // A subcommand is argv[1] when the command itself takes one and it isn't a flag — `emit
@@ -70,6 +82,7 @@ function parseArgs(argv) {
     strict: argv.includes("--strict"),
     offline: argv.includes("--offline"),
     root: process.cwd(),
+    data: null,
     pack: null,
     out: null,
   };
@@ -79,16 +92,55 @@ function parseArgs(argv) {
     const i = argv.indexOf(flag);
     if (i === -1) continue;
     if (!argv[i + 1] || argv[i + 1].startsWith("--")) throw new Error(`${flag} requires a value`);
-    args[key] = key === "root" ? resolve(argv[i + 1]) : argv[i + 1];
+    args[key] = argv[i + 1];
     consumed.add(i);
     consumed.add(i + 1);
   }
+  // `--root` is the one path named from outside the repo, so it resolves against the shell's cwd.
+  // Everything else names a place INSIDE that repo and resolves against it — `--out` already did,
+  // and `--data` doing anything else would make `--root /repo --data data/sdk` mean a different
+  // directory depending on where the caller happened to be standing. `resolve` leaves an absolute
+  // value alone, so an absolute `--data` is still accepted (and still has to be inside the root).
+  args.root = resolve(args.root);
+  if (args.data !== null) args.data = resolve(args.root, args.data);
   argv.forEach((a, i) => {
     if (BOOL_FLAGS.includes(a)) consumed.add(i);
   });
   // Whatever argv positions no flag or subcommand claimed — for `query`, that is its SQL statement.
   args.rest = argv.filter((_, i) => !consumed.has(i));
   return args;
+}
+
+/**
+ * Where the tables live — the ONE place this is decided, for every command.
+ *
+ * `<root>/data` is the default and remains the whole story for a repo with a single store. A flag
+ * honoured by `validate` but not by `rollup` would be worse than no flag at all: the two would
+ * disagree about what the data even is, and each would be right about a different directory. So
+ * every command asks here.
+ *
+ * `--data` exists for the repo that needs a second store beside the one it already has. A
+ * machine-owned table set — rewritten wholesale by a generator — must not share a root with
+ * hand-authored rows, because a single `rollup` regenerating both is wrong. The only way to
+ * express that before was `--root data/generated`, which lands the tables at
+ * `data/generated/data/` and tells every other part of the tool that the repo root is somewhere
+ * it is not.
+ *
+ * It must resolve inside `--root`, and not be `--root` itself. Both refusals are about what the
+ * other consumers of `--root` would then emit rather than about trust: `emit codeowners` anchors
+ * its patterns at the data root's path relative to the repo, so a root-equal data dir renders
+ * `/**` — a rule owning the entire repo, from a file claiming to own `data/` — and an outside one
+ * renders `/../elsewhere/**`, which GitHub does not honour and no reader can act on.
+ */
+function dataRootOf({ root, data }) {
+  if (data === null) return resolve(root, "data");
+
+  const rel = relative(root, data);
+  if (rel === "") throw new Error(`--data must be a directory inside --root, not --root itself — ${data}`);
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(`--data must be inside --root — ${data} is not under ${root}`);
+  }
+  return data;
 }
 
 function cmdPacks() {
@@ -102,8 +154,12 @@ function cmdPacks() {
   return 0;
 }
 
-function cmdInit({ root, pack }) {
-  const { written, skipped } = init({ root, pack });
+function cmdInit({ root, data, pack }) {
+  const dataRoot = dataRootOf({ root, data });
+  const { written, skipped } = init({ root, pack, dataRoot });
+  // The instructions below name real paths, so they follow --data. Telling someone who scaffolded
+  // `data/sdk/` to `mkdir data/<table>` sends them to build a second store by accident.
+  const dataRel = relative(root, dataRoot);
 
   for (const f of written) console.log(`  ✎ ${f}`);
   for (const f of skipped) console.log(`  · ${f} (exists — left alone)`);
@@ -114,11 +170,16 @@ function cmdInit({ root, pack }) {
     if (pack) {
       console.log("  1. Add a row to a generated table — copy its _template.md if it has one");
     } else {
-      console.log("  1. mkdir data/<table>, add a row (.md with frontmatter)");
-      console.log("     then declare a view in data/_views/<id>.view.yml");
+      console.log(`  1. mkdir ${dataRel}/<table>, add a row (.md with frontmatter)`);
+      console.log(`     then declare a view in ${dataRel}/_views/<id>.view.yml`);
     }
-    console.log("  2. gitdata rollup          # writes the view");
-    console.log("  3. gitdata rollup --check  # in CI: has anything drifted?");
+    // A store that is not the default one is only reachable by naming it, so the commands we hand
+    // back have to carry the flag. Without it these two lines send the reader at `data/`, which
+    // either is somebody else's store or does not exist — and the second line is destined for CI,
+    // where getting it wrong is a check that passes by looking at the wrong thing.
+    const at = data === null ? "" : ` --data ${dataRel}`;
+    console.log(`  2. gitdata rollup${at}          # writes the view`);
+    console.log(`  3. gitdata rollup${at} --check  # in CI: has anything drifted?`);
     console.log("     (ran init through npx? use the same npx invocation in place of `gitdata`)");
   }
   return 0;
@@ -150,8 +211,8 @@ function jsonReport(results, { diff }) {
   };
 }
 
-async function cmdRollup({ root, check, diff, json }) {
-  const results = await rollup({ dataRoot: resolve(root, "data"), repoRoot: root, check });
+async function cmdRollup({ root, data, check, diff, json }) {
+  const results = await rollup({ dataRoot: dataRootOf({ root, data }), repoRoot: root, check });
 
   // Both flags are check-mode reporting detail, not part of what a writing rollup does — they
   // are simply inert without --check rather than an error, matching how --check itself already
@@ -185,11 +246,12 @@ async function cmdRollup({ root, check, diff, json }) {
   return 0;
 }
 
-function cmdValidate({ root }) {
-  const { tables, issues } = validate({ dataRoot: resolve(root, "data") });
+function cmdValidate({ root, data }) {
+  const dataRoot = dataRootOf({ root, data });
+  const { tables, issues } = validate({ dataRoot });
 
   if (tables.length === 0) {
-    console.log("  no schemas found — add data/_schema/<table>.schema.yml");
+    console.log(`  no schemas found — add ${relative(root, dataRoot)}/_schema/<table>.schema.yml`);
     return 0;
   }
 
@@ -212,8 +274,8 @@ const MARK = { error: "✗", warn: "!", off: "·" };
  * own policy lowered, with the reason they gave for lowering it. A divergence that is deliberate
  * stays visible and attributed; a divergence nobody explained is itself a finding (GD000).
  */
-async function cmdDoctor({ root, check, strict, json, offline }) {
-  const report = await doctor({ root, offline });
+async function cmdDoctor({ root, data, check, strict, json, offline }) {
+  const report = await doctor({ root, dataRoot: dataRootOf({ root, data }), offline });
   const status = exitCode(report.summary, { check, strict });
 
   if (json) {
@@ -272,12 +334,16 @@ function cmdStores({ root, json }) {
   return 0;
 }
 
-async function cmdEmitCodeowners({ root, check, out }) {
+async function cmdEmitCodeowners({ root, data, check, out }) {
+  const dataRoot = dataRootOf({ root, data });
+  // Still keyed off --root, deliberately: a repo has one CODEOWNERS wherever its tables live, and
+  // GitHub only reads it at .github/CODEOWNERS. --data moves what is described, never where the
+  // description goes. Two stores emitting to one file is what --out is for.
   const outPath = resolve(root, out ?? ".github/CODEOWNERS");
-  const result = emitCodeowners({ dataRoot: resolve(root, "data"), repoRoot: root, outPath, check });
+  const result = emitCodeowners({ dataRoot, repoRoot: root, outPath, check });
 
   if (result.status === "empty") {
-    console.log("  no ownership declared — add data/<table>/_owners.yml, then re-run");
+    console.log(`  no ownership declared — add ${relative(root, dataRoot)}/<table>/_owners.yml, then re-run`);
     return 0;
   }
 
@@ -292,15 +358,16 @@ async function cmdEmitCodeowners({ root, check, out }) {
   return 0;
 }
 
-async function cmdTables({ root, json }) {
-  const tables = await describeTables(resolve(root, "data"));
+async function cmdTables({ root, data, json }) {
+  const dataRoot = dataRootOf({ root, data });
+  const tables = await describeTables(dataRoot);
 
   if (json) {
     console.log(JSON.stringify(tables, null, 2));
     return 0;
   }
   if (tables.length === 0) {
-    console.log("  no tables found — add data/<table>/<row>.md");
+    console.log(`  no tables found — add ${relative(root, dataRoot)}/<table>/<row>.md`);
     return 0;
   }
   for (const t of tables) {
@@ -325,10 +392,10 @@ function formatRows(rows) {
   return lines.join("\n");
 }
 
-async function cmdQuery({ root, json, rest }) {
+async function cmdQuery({ root, data, json, rest }) {
   const [sql] = rest;
   if (!sql) throw new Error('query requires a SQL statement, e.g. gitdata query "SELECT * FROM <table>"');
-  const rows = await runQuery(resolve(root, "data"), sql);
+  const rows = await runQuery(dataRootOf({ root, data }), sql);
 
   if (json) {
     console.log(JSON.stringify(rows, null, 2));

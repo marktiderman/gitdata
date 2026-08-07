@@ -840,12 +840,16 @@ const RUNNERS = {
  */
 export async function doctor({
   root,
+  // Defaults to `<root>/data`, so every existing caller is unaffected. It is a parameter at all
+  // because `doctor` reads the SAME tables `validate` and `rollup` read: a consumer who points
+  // those at another directory with `--data` and gets a compliance report about `<root>/data`
+  // has been told their store is healthy by a command that never opened it.
+  dataRoot = join(root, "data"),
   offline = false,
   fetchLatest = fetchLatestVersion,
   bundledPacks = listPacks,
   nodeVersion = process.versions.node,
 } = {}) {
-  const dataRoot = join(root, "data");
   const policy = readPolicy(dataRoot);
   // `scan:` REPLACES the defaults rather than extending them, so a consumer can narrow as well as
   // widen and the effective list is always exactly what their file says.
