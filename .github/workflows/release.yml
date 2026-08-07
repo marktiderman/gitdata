@@ -1,12 +1,9 @@
-# release.yml — publish to npm on a version tag.
+# release.yml — publish to npm, from a version bump on main or from a hand-pushed tag.
 #
 # WHY A TAG, NOT CHANGESETS. Changesets exists to coordinate versions across many packages
 # that depend on each other. gitdata is ONE package with no workspace and no siblings, so
 # changesets would add a bot, a config file, and a release PR to solve a problem this repo
-# does not have. Cutting a release here is: bump `version`, merge, tag, push.
-#
-#   npm version patch -m "release: v%s"   # edits package.json + package-lock.json, commits, tags
-#   git push --follow-tags
+# does not have.
 #
 # AUTH IS OIDC TRUSTED PUBLISHING — there is no NPM_TOKEN secret in this repo, deliberately.
 # npm mints a short-lived token from the GitHub OIDC identity of this exact repo + workflow
@@ -15,21 +12,39 @@
 #   npmjs.com → the @marktiderman/gitdata package → Settings → Trusted Publisher → GitHub Actions
 #     repository: marktiderman/gitdata     workflow: release.yml
 #
+# ⚠️ THAT BINDING IS TO THIS FILENAME, AND IT IS WHY EVERYTHING LIVES HERE.
+# A previous attempt put merge-triggered releases in a second file, release-on-merge.yml. It
+# gated correctly, tested, and tagged v0.3.1 — then npm answered the publish with:
+#
+#   npm error 404  The requested resource '@marktiderman/gitdata@0.3.1' could not be found
+#                  or you do not have permission to access it.
+#
+# npm did not recognise the OIDC subject, because the trusted publisher names `release.yml` and
+# the token came from `release-on-merge.yml`. A 404 rather than a 403 is npm's standard answer
+# for an unauthorised scoped package, which is what makes this failure read as "missing" instead
+# of "forbidden". DO NOT ADD A SECOND PUBLISHING WORKFLOW — either publish from here, or add the
+# new filename as a trusted publisher on npmjs.com first. Splitting it is what broke it.
+#
 # Every release from v0.1.1 on runs through here. v0.1.0 was hand-published to bootstrap the
 # package (a trusted publisher can only attach to one that already exists), so it alone carries
 # no provenance attestation.
 name: Release
 
 on:
+  # The ordinary path: bump `version` in package.json, merge, and this does the rest.
   push:
+    branches: [main]
+    # The manual override: re-release, or cut a version from a commit that is not main's head.
     tags: ["v*"]
 
 permissions:
   contents: read
 
 concurrency:
+  # Never cancel a half-finished publish, and never run two. npm versions are immutable; a race
+  # that publishes twice cannot be undone, only deprecated.
   group: release-${{ github.ref }}
-  cancel-in-progress: false # never cancel a half-finished publish
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -37,13 +52,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: read
+      contents: write # to push the tag on the merge-triggered path
       id-token: write # REQUIRED for OIDC Trusted Publishing (and provenance) — scoped to this job
-                       # only, so a future job added to this workflow does not inherit OIDC write.
+                      # only, so a future job added to this workflow does not inherit OIDC write.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
+          # Tags are needed to answer "already tagged?", and a shallow clone has none of them.
+          fetch-depth: 0
+          persist-credentials: true # the tag push below uses the checkout credential
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -56,36 +73,74 @@ jobs:
       # means Dependabot proposes the next bump as a reviewable diff instead of it landing
       # silently on the next release run.
       - name: Ensure npm supports OIDC Trusted Publishing
-        run: |
-          npm install -g npm@11.6.0
-          npm --version
+        run: npm install -g npm@11.6.0
 
-      - name: Install
-        run: npm ci
-
-      # The tag is the release trigger, so a tag that disagrees with package.json would
-      # publish a version nobody asked for, under a tag pointing at different code. Cheap
-      # check, unrecoverable mistake — npm versions are immutable once published.
-      - name: Tag must match package.json version
+      # THE GATE, and it asks the REGISTRY rather than git.
+      #
+      # An earlier version asked "does the tag exist?" and skipped if it did. That is wrong in
+      # exactly the state a failed publish leaves behind: v0.3.1 tagged, nothing on npm, and a
+      # retry that declines to do anything because the tag it created is in its way. The only
+      # question that decides whether there is work to do is whether the REGISTRY has this
+      # version — the tag is an artifact of trying, not evidence of having succeeded.
+      #
+      # On a tag push the tag must agree with package.json: the tag is the trigger, so a
+      # disagreement would publish a version nobody asked for under a tag pointing at other code.
+      # Cheap check, unrecoverable mistake.
+      - name: Decide whether there is anything to release
+        id: gate
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME#v}"
-          PKG="$(node -p "require('./package.json').version")"
-          if [ "$TAG" != "$PKG" ]; then
-            echo "::error::tag v$TAG does not match package.json version $PKG"
-            exit 1
-          fi
-          echo "publishing v$PKG"
+          VERSION="$(node -p "require('./package.json').version")"
+          NAME="$(node -p "require('./package.json').name")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "  package.json says $VERSION"
 
-      # Publishing untested code is how a broken release reaches consumers. Same suite CI
-      # runs; ~1s.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME#v}"
+            if [ "$TAG" != "$VERSION" ]; then
+              echo "::error::tag v$TAG does not match package.json version $VERSION"
+              exit 1
+            fi
+          fi
+
+          # `npm view` exits non-zero when the version does not exist, which is the signal.
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "  $NAME@$VERSION is already on the registry — nothing to do"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "  $NAME@$VERSION is not on the registry — releasing"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install
+        if: steps.gate.outputs.release == 'true'
+        run: npm ci
+
+      # Publishing untested code is how a broken release reaches consumers. Same suite CI runs.
+      # Runs before the tag so a tag can never point at a red commit — a lie that outlives the run.
       - name: Test
+        if: steps.gate.outputs.release == 'true'
         run: npm test
+
+      # Idempotent: a retry after a failed publish finds its own tag already there and moves on
+      # to the step that actually failed, rather than dying on "tag already exists".
+      - name: Tag
+        if: steps.gate.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+          TAG="v${{ steps.gate.outputs.version }}"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "  $TAG already exists — leaving it alone"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "release: $TAG"
+          git push origin "$TAG"
 
       # No `--access public` flag needed: publishConfig.access in package.json says so, which
       # keeps the setting with the package rather than in workflow YAML. Provenance comes free
-      # with trusted publishing (id-token: write above) — package.json deliberately does not
-      # set `provenance: false`, so the attestation is generated here and a manual bootstrap
-      # publish still works locally.
+      # with trusted publishing (id-token: write above).
       - name: Publish
+        if: steps.gate.outputs.release == 'true'
         run: npm publish
