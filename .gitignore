@@ -1,3 +1,6 @@
 node_modules/
 dist/
 *.log
+
+# Agent worktrees — scratch checkouts, never part of the tree.
+.claude/worktrees/

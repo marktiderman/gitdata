@@ -37,24 +37,6 @@ export const sqlValue = (v) => {
 };
 
 /**
- * A `where:` block → a SQL predicate.
- *
- *   { status: shipped }                  → "status" = 'shipped'
- *   { status: { in: [a, b] } }           → "status" IN ('a','b')
- *   { status: { not: shipped } }         → "status" IS NOT 'shipped'
- *   { version: { not: 1 } }              → "version" IS NOT 1
- *   { parent: null }                     → ("parent" IS NULL OR "parent" IN ('null','None',''))
- *
- * `null` deliberately also matches the STRINGS "null"/"None"/"" — frontmatter written by hand and
- * by three different tools disagrees about how to spell empty, and a rollup that silently drops
- * those rows is worse than one that accepts all four spellings.
- *
- * Values go through `sqlValue`, not `lit`, so a numeric or boolean filter compares as its own
- * type against the untyped column the projection built. `not:` stays `IS NOT` rather than `!=`
- * for the same reason `null` accepts four spellings: `NULL != 1` is NULL, so `!=` would drop
- * every row that simply lacks the key, which is the opposite of what "not 1" means to a consumer.
- */
-/**
  * "This cell holds nothing" — the one definition of empty, in one place.
  *
  * Frontmatter written by hand and by three different tools disagrees about how to spell empty, so
@@ -62,12 +44,62 @@ export const sqlValue = (v) => {
  * used to be spelled inline in exactly one branch of `where()`, which is why the other three
  * branches each disagreed with it in a different way.
  */
-const isEmpty = (col) => `(${col} IS NULL OR ${col} IN ('null','None',''))`;
+export const EMPTY_SPELLINGS = ["null", "None", ""];
+
+const isEmpty = (col) => `(${col} IS NULL OR ${col} IN (${EMPTY_SPELLINGS.map(lit).join(",")}))`;
+
+/**
+ * The same question asked of a JS value rather than a column.
+ *
+ * `src/shapes/tree.js` needs it to decide whether a row is a root, and used to carry its own copy
+ * with a comment promising it "mirrors the null semantics of `where:`". A promise to stay in step
+ * is not a mechanism for staying in step: the two were correct only until somebody edited one. An
+ * adversarial review found it while checking whether "one definition of empty" was actually true.
+ * It was not — there were two, and this export is what makes the claim honest.
+ */
+export const isEmptyValue = (v) => v == null || EMPTY_SPELLINGS.includes(v);
 
 /** Does an `in:`/`not_in:` list ask about empty? Only a real null does; the string "null" is a value. */
 const listHasNull = (list) => list.some((v) => v === null || v === undefined);
 const withoutNull = (list) => list.filter((v) => v !== null && v !== undefined);
 
+/**
+ * A `where:` block → a SQL predicate.
+ *
+ * EVERY operator, including the three this table never used to list:
+ *
+ *   { status: shipped }              → "status" = 'shipped'
+ *   { version: 1 }                   → "version" = 1                    (bare: see sqlValue)
+ *   { status: { not: shipped } }     → "status" IS NOT 'shipped'
+ *   { status: { in: [a, b] } }       → "status" IN ('a','b')
+ *   { status: { not_in: [a] } }      → ("status" NOT IN ('a') OR "status" IS NULL)
+ *   { parent: null }                 → EMPTY(parent)
+ *   { parent: { not: null } }        → NOT EMPTY(parent)
+ *   { parent: { in: [a, null] } }    → ("parent" IN ('a') OR EMPTY(parent))
+ *   { parent: { not_in: [a, null] } }→ ("parent" NOT IN ('a') AND NOT EMPTY(parent))
+ *
+ * ...where EMPTY(col) is `isEmpty` above: NULL, or any of EMPTY_SPELLINGS.
+ *
+ * TWO RULES EXPLAIN ALL OF IT.
+ *
+ * 1. EXCLUSION IS NULL-SAFE. `not:` and `not_in:` both keep a row that simply lacks the key,
+ *    because "not shipped" plainly includes a row with no status at all. `not:` gets this from
+ *    `IS NOT`; `not_in:` has to say it out loud with `OR col IS NULL`, since bare `NOT IN` is
+ *    three-valued and would drop those rows. Before they were made to agree, `{not: 1}` and
+ *    `{not_in: [1]}` — the same question, two spellings — returned different rows.
+ *
+ * 2. A REAL null IN A LIST MEANS EMPTY; the STRING "null" is just a value. `in: [a, null]` adds
+ *    the empty rows, and `not_in: [a, null]` removes them — so there the null-safety of rule 1 is
+ *    deliberately NOT applied, because the caller asked for empties to go.
+ *
+ * `not:` uses `IS NOT` rather than `!=` for rule 1's reason: `NULL != 1` is NULL, so `!=` would
+ * drop every row missing the key. The ONE exception is `not: null`, which compiles to
+ * `NOT EMPTY(col)` — `IS NOT 'null'` would match three of the four spellings of empty and so
+ * return rows that ARE empty.
+ *
+ * Values go through `sqlValue`, not `lit`, so a numeric or boolean filter compares as its own type
+ * against the untyped column the projection built.
+ */
 export function where(clause) {
   if (!clause) return "1=1";
   const parts = Object.entries(clause).map(([field, test]) => {
@@ -87,11 +119,20 @@ export function where(clause) {
       // `NOT IN` is three-valued: a NULL column yields NULL, which is not TRUE, so the row is
       // dropped. `not:` deliberately avoids that with `IS NOT`; this branch has to say the same
       // thing out loud or the two disagree about a row that simply lacks the key.
-      const notIn = vals.length ? `(${col} NOT IN (${vals.map((v) => sqlValue(v)).join(", ")}) OR ${col} IS NULL)` : null;
-      if (!listHasNull(test.not_in)) return notIn ?? "1=1"; // `not_in: []` excludes nothing
-      // An explicit null in the list means "and not the empty ones either", so the null-safety
-      // above is exactly what must NOT apply — the caller asked for empties to be excluded.
-      return notIn ? `(${notIn} AND NOT ${isEmpty(col)})` : `NOT ${isEmpty(col)}`;
+      const list = vals.map((v) => sqlValue(v)).join(", ");
+      if (!listHasNull(test.not_in)) {
+        // Rule 1: exclusion is null-safe. Bare `NOT IN` is three-valued — a NULL column yields
+        // NULL, which is not TRUE — so a row that simply lacks the key would be dropped, while
+        // `not:` keeps it. The `OR ... IS NULL` is what makes the two agree.
+        return vals.length ? `(${col} NOT IN (${list}) OR ${col} IS NULL)` : "1=1";
+      }
+      // Rule 2: an explicit null asks for the empty rows to go, so rule 1's null-safety is
+      // deliberately absent here. Emitting it anyway would be DEAD SQL — `NOT EMPTY(col)`
+      // already excludes NULL, so `OR col IS NULL` could never change the result. Found by an
+      // adversarial review; it was harmless and shipped noise into every such predicate.
+      return vals.length
+        ? `(${col} NOT IN (${list}) AND NOT ${isEmpty(col)})`
+        : `NOT ${isEmpty(col)}`;
     }
 
     if ("not" in test) {
