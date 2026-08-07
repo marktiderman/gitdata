@@ -1,0 +1,42 @@
+# The ideas table's contract — read by `gitdata validate`.
+#
+# This store is gitdata's OWN dogfood. It is not shipped: `files` in package.json lists
+# src, packs, docs, README.md, SHAPES.md and LICENSE — `data/` is deliberately absent, so no
+# consumer ever installs these rows. "Core ships zero tables" is about what the PACKAGE carries;
+# a repo keeping its own store is the tool being used, not the tool growing a table.
+kind: table-schema
+table: ideas
+
+# `solves` is REQUIRED, and it is the field that does the work. An idea that cannot say what
+# problem it removes is a preference, and preferences do not get rows. `raised` is REQUIRED for
+# the same reason a citation is: an idea whose provenance is lost cannot be re-argued, because
+# nobody can find what was already said about it.
+#
+# `verdict` is NOT required, because it is only meaningful once `state: declined`. Requiring it
+# would force every open idea to carry an empty verdict, and an empty required field teaches
+# people to type filler — the opposite of what the field is for.
+required: [kind, id, title, state, solves, raised, created]
+unique: [id]
+
+enum:
+  kind: [idea-record]
+  # ONE axis, deliberately.
+  #   open     — nobody is building it, and that is not a failure.
+  #   became   — it turned into real work. `became` names what.
+  #   declined — we decided against it. `verdict` says what answered it.
+  # There is no `building`: the moment an idea is being built it has an issue or a PR, and THAT
+  # is where its status lives. Two places tracking one state is how boards start lying.
+  state: [open, became, declined]
+
+pattern:
+  # `I-` + three digits. Append-only: an id is never renumbered or reused, so an id quoted in a
+  # commit message or an issue keeps its meaning forever.
+  id: "^I-[0-9]{3}$"
+  # Rejects month > 12 and day > 31. NOT CHECKED: calendar validity — a regex cannot count month
+  # lengths or leap years, so 2026-02-31 still passes. Said out loud rather than implied.
+  created: "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"
+
+# NO `ref:` on `became`. gitdata tracks its work in GitHub issues and PRs, not in a rows table,
+# so there is nothing in this store for it to point at. A `ref` to a table that does not exist
+# would fail every row that filled the field honestly. `became` is free text naming an issue or
+# PR (`#16`), and that is the accurate shape — not a weaker version of a link we cannot make.
