@@ -20,7 +20,7 @@ import { load, LoadError } from "../src/load.js";
 import { project, query, ProjectError } from "../src/project.js";
 import { renderTemplate, RenderError } from "../src/render.js";
 import { diffLines, formatDiff, loadViewSpecs, rollup, ViewSpecError } from "../src/rollup.js";
-import { orderBy } from "../src/shapes/sql.js";
+import { lit, orderBy, sqlValue, where } from "../src/shapes/sql.js";
 import { loadSchemas, validate, SchemaSpecError } from "../src/validate.js";
 
 const CLI = fileURLToPath(new URL("../src/cli.js", import.meta.url));
@@ -1090,6 +1090,176 @@ describe("introspection (tables/query)", () => {
       // a second read confirms the statement was never allowed to run at all.
       const stillTwo = await runQuery(join(r.root, "data"), "SELECT COUNT(*) AS n FROM things");
       assert.equal(stillTwo[0].n, 2);
+    } finally {
+      r.rm();
+    }
+  });
+});
+
+describe("where(): comparison values against non-text columns", () => {
+  /**
+   * The defect: every `where:` comparison value went through `lit()`, which string-quotes it,
+   * so `{contract_version: {not: 1}}` compiled to `"contract_version" IS NOT '1'`.
+   *
+   * Frontmatter numerics land in the projection as SQLite INTEGER (`typeof` says so), and the
+   * projection declares no column types at all — `CREATE TABLE t ("contract_version", ...)` —
+   * so the column has BLOB (i.e. no) affinity and SQLite applies no conversion on either side.
+   * An INTEGER value is therefore never equal to a TEXT literal: `1 IS NOT '1'` is TRUE, `1 =
+   * '1'` is FALSE. Measured in a real consumer as a view reporting all 13 rows stale while
+   * printing the current value `1` in their own column.
+   *
+   * Blast radius is the whole value path, not just `not:` — `=`, `in:` and `not_in:` share it.
+   */
+  const numericRepo = async () => {
+    const r = repo("gitdata-affinity-");
+    r.write("data/tasks/t1.md", "---\nid: t1\ncontract_version: 1\nshipped: true\n---\nOne.\n");
+    r.write("data/tasks/t2.md", "---\nid: t2\ncontract_version: 2\nshipped: false\n---\nTwo.\n");
+    r.write("data/tasks/t3.md", "---\nid: t3\ncontract_version: 10\nshipped: true\n---\nTen.\n");
+    const db = await project(load(join(r.root, "data")));
+    return { r, db, ids: (clause) => query(db, `SELECT id FROM tasks WHERE ${where(clause)} ORDER BY id`).map((x) => x.id) };
+  };
+
+  test("sqlValue emits numbers and booleans bare, and leaves lit() alone for everything else", () => {
+    assert.equal(sqlValue(1), "1");
+    assert.equal(sqlValue(0), "0");
+    assert.equal(sqlValue(-2.5), "-2.5");
+    assert.equal(sqlValue(true), "1");
+    assert.equal(sqlValue(false), "0");
+    assert.equal(sqlValue("1"), "'1'");
+    assert.equal(sqlValue("it's"), "'it''s'");
+    // No SQL spelling for these, so they keep the old behaviour rather than emitting broken SQL.
+    assert.equal(sqlValue(NaN), "'NaN'");
+    assert.equal(sqlValue(Infinity), "'Infinity'");
+    assert.equal(sqlValue(null), lit(null));
+    // lit() itself is untouched — section names, `map` entries and `wrap` fragments still quote.
+    assert.equal(lit(1), "'1'");
+    assert.equal(lit(true), "'true'");
+  });
+
+  test("frontmatter numerics really do project as INTEGER — the premise of every case below", async () => {
+    const { r, db } = await numericRepo();
+    try {
+      assert.deepEqual(
+        query(db, `SELECT typeof(contract_version) AS t FROM tasks WHERE id = 't1'`),
+        [{ t: "integer" }],
+      );
+      // And booleans, which project.js flattens to 1/0.
+      assert.deepEqual(query(db, `SELECT typeof(shipped) AS t FROM tasks WHERE id = 't1'`), [{ t: "integer" }]);
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+
+  test("`not:` on a numeric column excludes the matching row instead of every row", async () => {
+    const { r, db, ids } = await numericRepo();
+    try {
+      assert.deepEqual(ids({ contract_version: { not: 1 } }), ["t2", "t3"]);
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+
+  test("`=` on a numeric column matches instead of matching nothing", async () => {
+    const { r, db, ids } = await numericRepo();
+    try {
+      assert.deepEqual(ids({ contract_version: 1 }), ["t1"]);
+      assert.deepEqual(ids({ contract_version: 10 }), ["t3"]);
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+
+  test("`in:` and `not_in:` on a numeric column select the right rows", async () => {
+    const { r, db, ids } = await numericRepo();
+    try {
+      assert.deepEqual(ids({ contract_version: { in: [1, 10] } }), ["t1", "t3"]);
+      assert.deepEqual(ids({ contract_version: { not_in: [1] } }), ["t2", "t3"]);
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+
+  test("a boolean compares against the 1/0 the projection actually stores", async () => {
+    const { r, db, ids } = await numericRepo();
+    try {
+      assert.deepEqual(ids({ shipped: true }), ["t1", "t3"]);
+      assert.deepEqual(ids({ shipped: false }), ["t2"]);
+      assert.deepEqual(ids({ shipped: { not: true } }), ["t2"]);
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+
+  test("strings are still quoted and escaped — the fix must not widen into an injection", async () => {
+    const r = repo("gitdata-affinity-str-");
+    try {
+      r.write("data/tasks/a.md", "---\nid: a\nstatus: shipped\n---\nA.\n");
+      r.write("data/tasks/b.md", "---\nid: b\nstatus: \"it's open\"\n---\nB.\n");
+      r.write("data/tasks/c.md", "---\nid: c\nstatus: '1'\n---\nC.\n");
+      const db = await project(load(join(r.root, "data")));
+      try {
+        const ids = (clause) =>
+          query(db, `SELECT id FROM tasks WHERE ${where(clause)} ORDER BY id`).map((x) => x.id);
+        assert.equal(where({ status: "shipped" }), `"status" = 'shipped'`);
+        assert.equal(where({ status: "it's open" }), `"status" = 'it''s open'`);
+        assert.deepEqual(ids({ status: "shipped" }), ["a"]);
+        assert.deepEqual(ids({ status: "it's open" }), ["b"]);
+        assert.deepEqual(ids({ status: { not: "shipped" } }), ["b", "c"]);
+        // A YAML-quoted '1' is a string and must stay one on both sides of the comparison.
+        assert.deepEqual(ids({ status: "1" }), ["c"]);
+      } finally {
+        db.close();
+      }
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("`not:` keeps IS NOT, so a NULL row survives rather than being silently dropped", async () => {
+    // `!=` would be the obvious "fix" and is the wrong one: SQL `NULL != 1` is NULL, not TRUE,
+    // so every row missing the key would vanish from a `not:` filter. The null-safety of IS NOT
+    // is load-bearing here, exactly as it is for the four-spellings-of-empty handling below.
+    const r = repo("gitdata-affinity-null-");
+    try {
+      r.write("data/tasks/t1.md", "---\nid: t1\ncontract_version: 1\n---\nOne.\n");
+      r.write("data/tasks/t2.md", "---\nid: t2\n---\nNo version at all.\n");
+      const db = await project(load(join(r.root, "data")));
+      try {
+        assert.match(where({ contract_version: { not: 1 } }), /IS NOT/);
+        assert.deepEqual(
+          query(db, `SELECT id FROM tasks WHERE ${where({ contract_version: { not: 1 } })} ORDER BY id`),
+          [{ id: "t2" }],
+        );
+      } finally {
+        db.close();
+      }
+    } finally {
+      r.rm();
+    }
+  });
+
+  test("`field: null` still accepts all four spellings of empty", async () => {
+    const r = repo("gitdata-affinity-empty-");
+    try {
+      r.write("data/tasks/a.md", "---\nid: a\nparent: null\n---\nA.\n");
+      r.write("data/tasks/b.md", "---\nid: b\nparent: 'null'\n---\nB.\n");
+      r.write("data/tasks/c.md", "---\nid: c\nparent: 'None'\n---\nC.\n");
+      r.write("data/tasks/d.md", "---\nid: d\nparent: ''\n---\nD.\n");
+      r.write("data/tasks/e.md", "---\nid: e\nparent: a\n---\nE.\n");
+      const db = await project(load(join(r.root, "data")));
+      try {
+        assert.deepEqual(
+          query(db, `SELECT id FROM tasks WHERE ${where({ parent: null })} ORDER BY id`).map((x) => x.id),
+          ["a", "b", "c", "d"],
+        );
+      } finally {
+        db.close();
+      }
     } finally {
       r.rm();
     }

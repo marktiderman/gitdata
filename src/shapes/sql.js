@@ -14,26 +14,56 @@ export const lit = (v) => `'${String(v).replace(/'/g, "''")}'`;
 export const ident = (v) => `"${String(v).replace(/"/g, '""')}"`;
 
 /**
+ * A comparison VALUE → a SQL literal of the right type.
+ *
+ * Distinct from `lit()`, which is the string-literal primitive and stays that way: it is also how
+ * section names, `map` keys/values and `wrap` fragments reach the SQL, where quoting is always
+ * correct. A value being COMPARED to a column is the one place where the type has to survive.
+ *
+ * It has to survive because the projection declares no column types — `CREATE TABLE t ("v")` —
+ * so every column has BLOB (no) affinity and SQLite converts nothing on either side of a
+ * comparison. A frontmatter `contract_version: 1` is stored as INTEGER, and `1 = '1'` is FALSE
+ * while `1 IS NOT '1'` is TRUE. Quoting a numeric filter value therefore did not merely narrow a
+ * result — it inverted it, silently, with no error and no empty-result hint to notice.
+ *
+ * Booleans emit 1/0 to match `toSqlValue`'s flattening in project.js. Everything else — strings,
+ * null, dates, anything exotic — keeps the previous behaviour and goes through `lit()`; a
+ * non-finite number has no SQL spelling, so it does too.
+ */
+export const sqlValue = (v) => {
+  if (typeof v === "boolean") return v ? "1" : "0";
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  return lit(v);
+};
+
+/**
  * A `where:` block → a SQL predicate.
  *
  *   { status: shipped }                  → "status" = 'shipped'
  *   { status: { in: [a, b] } }           → "status" IN ('a','b')
  *   { status: { not: shipped } }         → "status" IS NOT 'shipped'
+ *   { version: { not: 1 } }              → "version" IS NOT 1
  *   { parent: null }                     → ("parent" IS NULL OR "parent" IN ('null','None',''))
  *
  * `null` deliberately also matches the STRINGS "null"/"None"/"" — frontmatter written by hand and
  * by three different tools disagrees about how to spell empty, and a rollup that silently drops
  * those rows is worse than one that accepts all four spellings.
+ *
+ * Values go through `sqlValue`, not `lit`, so a numeric or boolean filter compares as its own
+ * type against the untyped column the projection built. `not:` stays `IS NOT` rather than `!=`
+ * for the same reason `null` accepts four spellings: `NULL != 1` is NULL, so `!=` would drop
+ * every row that simply lacks the key, which is the opposite of what "not 1" means to a consumer.
  */
 export function where(clause) {
   if (!clause) return "1=1";
   const parts = Object.entries(clause).map(([field, test]) => {
     const col = ident(field);
     if (test === null) return `(${col} IS NULL OR ${col} IN ('null','None',''))`;
-    if (typeof test !== "object") return `${col} = ${lit(test)}`;
-    if (Array.isArray(test.in)) return `${col} IN (${test.in.map(lit).join(", ")})`;
-    if (Array.isArray(test.not_in)) return `${col} NOT IN (${test.not_in.map(lit).join(", ")})`;
-    if ("not" in test) return `${col} IS NOT ${lit(test.not)}`;
+    if (typeof test !== "object") return `${col} = ${sqlValue(test)}`;
+    if (Array.isArray(test.in)) return `${col} IN (${test.in.map((v) => sqlValue(v)).join(", ")})`;
+    if (Array.isArray(test.not_in))
+      return `${col} NOT IN (${test.not_in.map((v) => sqlValue(v)).join(", ")})`;
+    if ("not" in test) return `${col} IS NOT ${sqlValue(test.not)}`;
     throw new ShapeError(`unsupported filter on "${field}": ${JSON.stringify(test)}`);
   });
   return parts.length ? parts.join(" AND ") : "1=1";
