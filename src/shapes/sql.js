@@ -54,16 +54,52 @@ export const sqlValue = (v) => {
  * for the same reason `null` accepts four spellings: `NULL != 1` is NULL, so `!=` would drop
  * every row that simply lacks the key, which is the opposite of what "not 1" means to a consumer.
  */
+/**
+ * "This cell holds nothing" — the one definition of empty, in one place.
+ *
+ * Frontmatter written by hand and by three different tools disagrees about how to spell empty, so
+ * an absent key, a YAML `null`, and the STRINGS "null"/"None"/"" all mean the same thing. This
+ * used to be spelled inline in exactly one branch of `where()`, which is why the other three
+ * branches each disagreed with it in a different way.
+ */
+const isEmpty = (col) => `(${col} IS NULL OR ${col} IN ('null','None',''))`;
+
+/** Does an `in:`/`not_in:` list ask about empty? Only a real null does; the string "null" is a value. */
+const listHasNull = (list) => list.some((v) => v === null || v === undefined);
+const withoutNull = (list) => list.filter((v) => v !== null && v !== undefined);
+
 export function where(clause) {
   if (!clause) return "1=1";
   const parts = Object.entries(clause).map(([field, test]) => {
     const col = ident(field);
-    if (test === null) return `(${col} IS NULL OR ${col} IN ('null','None',''))`;
+    if (test === null) return isEmpty(col);
     if (typeof test !== "object") return `${col} = ${sqlValue(test)}`;
-    if (Array.isArray(test.in)) return `${col} IN (${test.in.map((v) => sqlValue(v)).join(", ")})`;
-    if (Array.isArray(test.not_in))
-      return `${col} NOT IN (${test.not_in.map((v) => sqlValue(v)).join(", ")})`;
-    if ("not" in test) return `${col} IS NOT ${sqlValue(test.not)}`;
+
+    if (Array.isArray(test.in)) {
+      const vals = withoutNull(test.in);
+      const inList = vals.length ? `${col} IN (${vals.map((v) => sqlValue(v)).join(", ")})` : null;
+      if (!listHasNull(test.in)) return inList ?? "1=0"; // `in: []` matches nothing, and says so
+      return inList ? `(${inList} OR ${isEmpty(col)})` : isEmpty(col);
+    }
+
+    if (Array.isArray(test.not_in)) {
+      const vals = withoutNull(test.not_in);
+      // `NOT IN` is three-valued: a NULL column yields NULL, which is not TRUE, so the row is
+      // dropped. `not:` deliberately avoids that with `IS NOT`; this branch has to say the same
+      // thing out loud or the two disagree about a row that simply lacks the key.
+      const notIn = vals.length ? `(${col} NOT IN (${vals.map((v) => sqlValue(v)).join(", ")}) OR ${col} IS NULL)` : null;
+      if (!listHasNull(test.not_in)) return notIn ?? "1=1"; // `not_in: []` excludes nothing
+      // An explicit null in the list means "and not the empty ones either", so the null-safety
+      // above is exactly what must NOT apply — the caller asked for empties to be excluded.
+      return notIn ? `(${notIn} AND NOT ${isEmpty(col)})` : `NOT ${isEmpty(col)}`;
+    }
+
+    if ("not" in test) {
+      // The complement of `field: null` must be the complement, not `IS NOT 'null'` — which
+      // matches three of the four spellings of empty and so returns rows that ARE empty.
+      if (test.not === null) return `NOT ${isEmpty(col)}`;
+      return `${col} IS NOT ${sqlValue(test.not)}`;
+    }
     throw new ShapeError(`unsupported filter on "${field}": ${JSON.stringify(test)}`);
   });
   return parts.length ? parts.join(" AND ") : "1=1";

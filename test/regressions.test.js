@@ -1265,3 +1265,99 @@ describe("where(): comparison values against non-text columns", () => {
     }
   });
 });
+
+describe("where(): one definition of empty, across all four operators", () => {
+  /**
+   * The defect: `(col IS NULL OR col IN ('null','None',''))` was spelled inline in exactly ONE
+   * branch of `where()` — `field: null` — and the other three each disagreed with it differently.
+   *
+   *   `not: null`   compiled to `IS NOT 'null'`, which matches three of the four spellings of
+   *                 empty, so "not empty" returned rows that ARE empty. (upstream issue #16)
+   *   `not_in:`     compiled to a bare `NOT IN`, which is three-valued: a NULL column yields NULL,
+   *                 not TRUE, so a row lacking the key was dropped — while `not:` deliberately
+   *                 kept it via `IS NOT`. Two spellings of exclusion, two different answers.
+   *   `in: [null]`  compiled to `IN ('null')`, so asking for empty missed every actually-NULL row.
+   *
+   * Reported by a review bot as "not_in mishandles a null INSIDE the array". That was half right:
+   * the array contents are irrelevant — `not_in: [1]` with no null at all already dropped the
+   * NULL row. The cause is `NOT IN`'s three-valued logic, not the literal.
+   */
+  const fixture = async () => {
+    const r = repo("gitdata-empty-");
+    r.write("data/t/a.md", "---\nid: a\nv: 1\n---\nA.\n");
+    r.write("data/t/b.md", "---\nid: b\nv: 2\n---\nB.\n");
+    r.write("data/t/c.md", "---\nid: c\n---\nNo v at all.\n");
+    r.write("data/t/d.md", "---\nid: d\nv: 'null'\n---\nD.\n");
+    r.write("data/t/e.md", "---\nid: e\nv: 'None'\n---\nE.\n");
+    r.write("data/t/f.md", "---\nid: f\nv: ''\n---\nF.\n");
+    const db = await project(load(join(r.root, "data")));
+    return { r, db, ids: (c) => query(db, `SELECT id FROM t WHERE ${where(c)} ORDER BY id`).map((x) => x.id) };
+  };
+
+  test("`not: null` is the exact complement of `field: null` — disjoint AND covering", async () => {
+    const { r, db, ids } = await fixture();
+    try {
+      const empty = ids({ v: null });
+      const notEmpty = ids({ v: { not: null } });
+      assert.deepEqual(empty, ["c", "d", "e", "f"]);
+      assert.deepEqual(notEmpty, ["a", "b"]);
+      // The assertion that would have caught the original defect, and that stays true if the
+      // four-spellings list ever grows — unlike two tests each pinning one side.
+      assert.deepEqual(empty.filter((x) => notEmpty.includes(x)), [], "the two must be disjoint");
+      assert.deepEqual([...empty, ...notEmpty].sort(), ["a", "b", "c", "d", "e", "f"], "and must cover the table");
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+
+  test("`not_in:` keeps a row that lacks the key, exactly as `not:` does", async () => {
+    const { r, db, ids } = await fixture();
+    try {
+      // These two ask the same question and must not answer differently. Before the fix,
+      // `not: 1` returned five rows and `not_in: [1]` returned one.
+      assert.deepEqual(ids({ v: { not: 1 } }), ids({ v: { not_in: [1] } }));
+      assert.deepEqual(ids({ v: { not_in: [1] } }), ["b", "c", "d", "e", "f"]);
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+
+  test("an explicit null in a list means empty, in both directions", async () => {
+    const { r, db, ids } = await fixture();
+    try {
+      assert.deepEqual(ids({ v: { in: [1, null] } }), ["a", "c", "d", "e", "f"]);
+      // `not_in` with a null asks to exclude the empties too, so the null-safety above is
+      // deliberately NOT applied here — the caller said to drop them.
+      assert.deepEqual(ids({ v: { not_in: [1, null] } }), ["b"]);
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+
+  test("the string 'null' is a value, not a way of asking about empty", async () => {
+    const { r, db, ids } = await fixture();
+    try {
+      // Only a real null asks about emptiness. Quoted, it is just text — and `d` is the row
+      // holding it. This is what stops `in: ['null']` silently becoming an emptiness query.
+      assert.deepEqual(ids({ v: { in: ["null"] } }), ["d"]);
+      assert.equal(where({ v: { in: ["null"] } }), `"v" IN ('null')`);
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+
+  test("empty lists say what they mean rather than emitting broken SQL", async () => {
+    const { r, db, ids } = await fixture();
+    try {
+      assert.deepEqual(ids({ v: { in: [] } }), []); // nothing is in nothing
+      assert.deepEqual(ids({ v: { not_in: [] } }).length, 6); // everything is not in nothing
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+});
