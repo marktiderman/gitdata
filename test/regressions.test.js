@@ -1351,7 +1351,11 @@ describe("where(): one definition of empty, across all four operators", () => {
     }
   });
 
-  test("empty lists say what they mean rather than emitting broken SQL", async () => {
+  // NOT a behaviour change, despite what this test was originally called. SQLite accepts `IN ()`
+  // and `NOT IN ()` and returns these same rows either way — verified by executing both. `1=0` /
+  // `1=1` is a readability and portability improvement, and the test name used to claim the old
+  // SQL was broken, which was false.
+  test("empty lists select nothing and exclude nothing — unchanged, now said plainly", async () => {
     const { r, db, ids } = await fixture();
     try {
       assert.deepEqual(ids({ v: { in: [] } }), []); // nothing is in nothing
