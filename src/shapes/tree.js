@@ -16,13 +16,17 @@
  * silently — the failure mode a hierarchy view exists to expose.
  */
 import { query } from "../project.js";
-import { column, ident, orderBy, ShapeError, where } from "./sql.js";
+import { column, ident, isEmptyValue, orderBy, ShapeError, where } from "./sql.js";
 
 /**
- * Frontmatter written by hand and by three different tools disagrees about how to spell empty.
- * Mirrors the null semantics of `where:` in sql.js so a root is a root either way.
+ * A root is a row whose parent is empty — and "empty" means exactly what it means everywhere else.
+ *
+ * This used to be a private copy of the four spellings with a comment promising it "mirrors the
+ * null semantics of `where:`". A promise to stay in step is not a mechanism for staying in step;
+ * the copies were correct only until somebody edited one. Now it IS the same definition, so
+ * `where: {parent: null}` and tree's root detection cannot disagree.
  */
-const isRoot = (v) => v == null || v === "null" || v === "None" || v === "";
+const isRoot = isEmptyValue;
 
 /**
  * @param {object} db

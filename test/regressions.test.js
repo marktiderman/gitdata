@@ -20,7 +20,7 @@ import { load, LoadError } from "../src/load.js";
 import { project, query, ProjectError } from "../src/project.js";
 import { renderTemplate, RenderError } from "../src/render.js";
 import { diffLines, formatDiff, loadViewSpecs, rollup, ViewSpecError } from "../src/rollup.js";
-import { lit, orderBy, sqlValue, where } from "../src/shapes/sql.js";
+import { column, lit, orderBy, rowExpr, ShapeError, sqlValue, where } from "../src/shapes/sql.js";
 import { loadSchemas, validate, SchemaSpecError } from "../src/validate.js";
 
 const CLI = fileURLToPath(new URL("../src/cli.js", import.meta.url));
@@ -1263,5 +1263,229 @@ describe("where(): comparison values against non-text columns", () => {
     } finally {
       r.rm();
     }
+  });
+});
+
+describe("where(): one definition of empty, across all four operators", () => {
+  /**
+   * The defect: `(col IS NULL OR col IN ('null','None',''))` was spelled inline in exactly ONE
+   * branch of `where()` — `field: null` — and the other three each disagreed with it differently.
+   *
+   *   `not: null`   compiled to `IS NOT 'null'`, which matches three of the four spellings of
+   *                 empty, so "not empty" returned rows that ARE empty. (upstream issue #16)
+   *   `not_in:`     compiled to a bare `NOT IN`, which is three-valued: a NULL column yields NULL,
+   *                 not TRUE, so a row lacking the key was dropped — while `not:` deliberately
+   *                 kept it via `IS NOT`. Two spellings of exclusion, two different answers.
+   *   `in: [null]`  compiled to `IN ('null')`, so asking for empty missed every actually-NULL row.
+   *
+   * Reported by a review bot as "not_in mishandles a null INSIDE the array". That was half right:
+   * the array contents are irrelevant — `not_in: [1]` with no null at all already dropped the
+   * NULL row. The cause is `NOT IN`'s three-valued logic, not the literal.
+   */
+  const fixture = async () => {
+    const r = repo("gitdata-empty-");
+    r.write("data/t/a.md", "---\nid: a\nv: 1\n---\nA.\n");
+    r.write("data/t/b.md", "---\nid: b\nv: 2\n---\nB.\n");
+    r.write("data/t/c.md", "---\nid: c\n---\nNo v at all.\n");
+    r.write("data/t/d.md", "---\nid: d\nv: 'null'\n---\nD.\n");
+    r.write("data/t/e.md", "---\nid: e\nv: 'None'\n---\nE.\n");
+    r.write("data/t/f.md", "---\nid: f\nv: ''\n---\nF.\n");
+    const db = await project(load(join(r.root, "data")));
+    return { r, db, ids: (c) => query(db, `SELECT id FROM t WHERE ${where(c)} ORDER BY id`).map((x) => x.id) };
+  };
+
+  test("`not: null` is the exact complement of `field: null` — disjoint AND covering", async () => {
+    const { r, db, ids } = await fixture();
+    try {
+      const empty = ids({ v: null });
+      const notEmpty = ids({ v: { not: null } });
+      assert.deepEqual(empty, ["c", "d", "e", "f"]);
+      assert.deepEqual(notEmpty, ["a", "b"]);
+      // The assertion that would have caught the original defect, and that stays true if the
+      // four-spellings list ever grows — unlike two tests each pinning one side.
+      assert.deepEqual(empty.filter((x) => notEmpty.includes(x)), [], "the two must be disjoint");
+      assert.deepEqual([...empty, ...notEmpty].sort(), ["a", "b", "c", "d", "e", "f"], "and must cover the table");
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+
+  test("`not_in:` keeps a row that lacks the key, exactly as `not:` does", async () => {
+    const { r, db, ids } = await fixture();
+    try {
+      // These two ask the same question and must not answer differently. Measured against the
+      // old engine on this fixture: `not: 1` returned b,c,d,e,f and `not_in: [1]` returned
+      // b,d,e,f — it silently dropped `c`, the row with no `v` key at all.
+      assert.deepEqual(ids({ v: { not: 1 } }), ids({ v: { not_in: [1] } }));
+      assert.deepEqual(ids({ v: { not_in: [1] } }), ["b", "c", "d", "e", "f"]);
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+
+  test("an explicit null in a list means empty, in both directions", async () => {
+    const { r, db, ids } = await fixture();
+    try {
+      assert.deepEqual(ids({ v: { in: [1, null] } }), ["a", "c", "d", "e", "f"]);
+      // `not_in` with a null asks to exclude the empties too, so the null-safety above is
+      // deliberately NOT applied here — the caller said to drop them.
+      assert.deepEqual(ids({ v: { not_in: [1, null] } }), ["b"]);
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+
+  test("the string 'null' is a value, not a way of asking about empty", async () => {
+    const { r, db, ids } = await fixture();
+    try {
+      // Only a real null asks about emptiness. Quoted, it is just text — and `d` is the row
+      // holding it. This is what stops `in: ['null']` silently becoming an emptiness query.
+      assert.deepEqual(ids({ v: { in: ["null"] } }), ["d"]);
+      assert.equal(where({ v: { in: ["null"] } }), `"v" IN ('null')`);
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+
+  // NOT a behaviour change, despite what this test was originally called. SQLite accepts `IN ()`
+  // and `NOT IN ()` and returns these same rows either way — verified by executing both. `1=0` /
+  // `1=1` is a readability and portability improvement, and the test name used to claim the old
+  // SQL was broken, which was false.
+  test("empty lists select nothing and exclude nothing — unchanged, now said plainly", async () => {
+    const { r, db, ids } = await fixture();
+    try {
+      assert.deepEqual(ids({ v: { in: [] } }), []); // nothing is in nothing
+      assert.deepEqual(ids({ v: { not_in: [] } }), ["a", "b", "c", "d", "e", "f"]); // everything is not in nothing
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+});
+
+describe("where(): the gaps an adversarial mutation audit found", () => {
+  /**
+   * Five mutations survived the first version of this suite. Each test below kills one, and each
+   * names it, because a test whose motivating mutant is not written down is a test the next
+   * reader may delete as redundant.
+   *
+   * The audit also corrected a claim made above: "disjoint AND covering" does NOT catch a changed
+   * spelling set. `not: null` compiles to the literal `NOT isEmpty(col)`, so X and NOT X are
+   * disjoint-and-covering whatever X says — proven by dropping 'None' from isEmpty and watching
+   * the complement test still pass. What covering DOES catch is NULL propagation, where a row
+   * vanishes from both sides. That is a real guard; it is just a narrower one than claimed.
+   */
+  const fixture = async () => {
+    const r = repo("gitdata-empty-gaps-");
+    r.write("data/t/a.md", "---\nid: a\nv: 1\n---\nA.\n");
+    r.write("data/t/b.md", "---\nid: b\nv: 2\n---\nB.\n");
+    r.write("data/t/c.md", "---\nid: c\n---\nNo v at all.\n");
+    r.write("data/t/d.md", "---\nid: d\nv: 'null'\n---\nD.\n");
+    r.write("data/t/e.md", "---\nid: e\nv: 'None'\n---\nE.\n");
+    r.write("data/t/f.md", "---\nid: f\nv: ''\n---\nF.\n");
+    const db = await project(load(join(r.root, "data")));
+    return { r, db, ids: (c) => query(db, `SELECT id FROM t WHERE ${where(c)} ORDER BY id`).map((x) => x.id) };
+  };
+
+  test("mutant E7: `not_in: ['null']` must exclude the string, not treat it as empty", async () => {
+    const { r, db, ids } = await fixture();
+    try {
+      // The PR claimed "the string 'null' is a value, pinned by a test". It was pinned for `in:`
+      // only. Widening not_in's null-safety from `IS NULL` to `isEmpty(col)` — the exact
+      // "use the helper everywhere" edit a future reader would make — returned `d`, the row the
+      // caller explicitly asked to exclude, and the whole suite stayed green.
+      assert.deepEqual(ids({ v: { not_in: ["null"] } }), ["a", "b", "c", "e", "f"]);
+      // The rows alone do not pin it on a fixture this size; the emitted SQL does.
+      assert.equal(where({ v: { not_in: ["null"] } }), `("v" NOT IN ('null') OR "v" IS NULL)`);
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+
+  test("mutants E1/E2: a list of nothing but nulls is the plain empty question", async () => {
+    const { r, db, ids } = await fixture();
+    try {
+      // This path had no test at all — only `[1, null]` was covered.
+      assert.deepEqual(ids({ v: { in: [null] } }), ids({ v: null }));
+      assert.deepEqual(ids({ v: { not_in: [null] } }), ids({ v: { not: null } }));
+      assert.deepEqual(ids({ v: { in: [null] } }), ["c", "d", "e", "f"]);
+      assert.deepEqual(ids({ v: { not_in: [null] } }), ["a", "b"]);
+    } finally {
+      db.close();
+      r.rm();
+    }
+  });
+
+  test("mutant E9: an unsupported filter throws rather than matching everything", () => {
+    // Nothing in the suite covered this. Replacing the throw with `return "1=1"` was invisible —
+    // and it is the worst possible silent failure: a typo'd operator would match every row.
+    assert.throws(() => where({ v: { bogus: 1 } }), ShapeError);
+  });
+
+  test("falsy is not empty — 0 and false are values", async () => {
+    // The single most likely future regression in a helper named `isEmpty`: rewriting it as
+    // `NOT col`, or adding '0' to the spelling list. Nothing stopped either.
+    const r = repo("gitdata-falsy-");
+    try {
+      r.write("data/t/z.md", "---\nid: z\nv: 0\n---\nZero.\n");
+      r.write("data/t/y.md", "---\nid: y\nv: false\n---\nFalse.\n");
+      r.write("data/t/x.md", "---\nid: x\nv: ''\n---\nEmpty string.\n");
+      const db = await project(load(join(r.root, "data")));
+      try {
+        const ids = (c) => query(db, `SELECT id FROM t WHERE ${where(c)} ORDER BY id`).map((q) => q.id);
+        assert.deepEqual(ids({ v: null }), ["x"]);
+        assert.deepEqual(ids({ v: { not: null } }), ["y", "z"]);
+      } finally {
+        db.close();
+      }
+    } finally {
+      r.rm();
+    }
+  });
+});
+
+describe("column(): the shorthand renders identically to the object form", () => {
+  /**
+   * The shorthand `columns: [id, status]` returned a BARE identifier while the object form wrapped
+   * everything in COALESCE. `rowExpr` joins with `||`, and SQLite's `||` propagates NULL, so one
+   * null column nulled the entire line and the row rendered as a BLANK LINE inside the markdown
+   * table — no error, no warning, just a gap where a row should be.
+   *
+   * Latent for as long as the shorthand has existed; made systematic by the `where:` null work in
+   * this same release, because `not_in:` admits rows precisely BECAUSE the tested column is NULL.
+   * A view naming that column in shorthand rendered those rows blank 100% of the time.
+   */
+  const render = async (cols) => {
+    const r = repo("gitdata-shorthand-");
+    r.write("data/t/a.md", "---\nid: a\nstatus: building\n---\nA.\n");
+    r.write("data/t/b.md", "---\nid: b\n---\nNo status at all.\n");
+    r.write("data/t/c.md", "---\nid: c\nstatus: 'a|b'\n---\nPipe in the value.\n");
+    const db = await project(load(join(r.root, "data")));
+    try {
+      const expr = rowExpr(cols.map(column));
+      return query(db, `SELECT ${expr} AS line FROM t ORDER BY id`).map((x) => x.line);
+    } finally {
+      db.close();
+      r.rm();
+    }
+  };
+
+  test("a row missing a column renders a cell, not a blank line", async () => {
+    const lines = await render(["id", "status"]);
+    assert.deepEqual(lines, ["| a | building |", "| b |  |", "| c | a/b |"]);
+    // The defect was a NULL line, which the renderer emits as an empty string in the table body.
+    assert.equal(lines.filter((l) => l === null).length, 0);
+  });
+
+  test("shorthand and object form emit the same rows — that is the whole contract", async () => {
+    assert.deepEqual(
+      await render(["id", "status"]),
+      await render([{ from: "id" }, { from: "status" }]),
+    );
   });
 });
