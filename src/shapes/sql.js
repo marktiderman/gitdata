@@ -6,6 +6,8 @@
  * never what a "feature" is.
  */
 
+import { containerNoun, isScalar, preview } from "../scalar.js";
+
 export class ShapeError extends Error {}
 
 /** SQL string literal. Single quotes doubled — the only escaping SQLite needs. */
@@ -37,6 +39,30 @@ export const sqlValue = (v) => {
 };
 
 /**
+ * The same, but it refuses to invent a spelling for a container.
+ *
+ * `lit()` reaches `String(v)` for "anything exotic", and `String(["ready","approved"])` is
+ * `ready,approved` — a plausible-looking string that no row's `status` can equal, so
+ * `{not: ["ready","approved"]}` compiled to a predicate every row passes. It parsed, validated,
+ * rendered, and filtered NOTHING, and the board it fed reported 42 where the answer was 33.
+ *
+ * A list has no scalar spelling. Saying so is the whole fix, and it belongs here — at the
+ * coercion — rather than in each operator, because every operator that ever compares a value
+ * arrives through this function. See `src/scalar.js` for the rule this enforces.
+ *
+ * `hint` is what the author should have written. Refusing correctly is worth less than refusing
+ * with the answer attached: `not_in` sits THREE LINES above `not` in this file, and the author who
+ * hit this went and read the source to find it.
+ */
+export function comparisonValue(v, { field, operator, hint }) {
+  if (isScalar(v)) return sqlValue(v);
+  throw new ShapeError(
+    `filter on "${field}": ${operator} compares one value and got ${containerNoun(v)}, ` +
+      `${preview(v)} — ${hint}`,
+  );
+}
+
+/**
  * "This cell holds nothing" — the one definition of empty, in one place.
  *
  * Frontmatter written by hand and by three different tools disagrees about how to spell empty, so
@@ -58,6 +84,18 @@ const isEmpty = (col) => `(${col} IS NULL OR ${col} IN (${EMPTY_SPELLINGS.map(li
  * It was not — there were two, and this export is what makes the claim honest.
  */
 export const isEmptyValue = (v) => v == null || EMPTY_SPELLINGS.includes(v);
+
+/**
+ * One ELEMENT of an `in:`/`not_in:` list. A nested list is a mistake with no correct reading —
+ * `in: [[a, b]]` is one author flattening a list one level too few — so it is named rather than
+ * stringified into `'a,b'`, which is what `lit()` would otherwise have produced.
+ */
+const elementValue = (v, field, operator) =>
+  comparisonValue(v, {
+    field,
+    operator: `\`${operator}:\``,
+    hint: "each entry must be a single value, so flatten it",
+  });
 
 /** Does an `in:`/`not_in:` list ask about empty? Only a real null does; the string "null" is a value. */
 const listHasNull = (list) => list.some((v) => v === null || v === undefined);
@@ -107,9 +145,20 @@ export function where(clause) {
     if (test === null) return isEmpty(col);
     if (typeof test !== "object") return `${col} = ${sqlValue(test)}`;
 
+    // `status: [a, b]` reached the "unsupported filter" throw at the bottom, which named the
+    // value and not the fix. The author meant `in:`; say so.
+    if (Array.isArray(test)) {
+      throw new ShapeError(
+        `filter on "${field}": equality compares one value and got a list, ${preview(test)} — ` +
+          `use \`${field}: {in: [...]}\` to match any of them`,
+      );
+    }
+
     if (Array.isArray(test.in)) {
       const vals = withoutNull(test.in);
-      const inList = vals.length ? `${col} IN (${vals.map((v) => sqlValue(v)).join(", ")})` : null;
+      const inList = vals.length
+        ? `${col} IN (${vals.map((v) => elementValue(v, field, "in")).join(", ")})`
+        : null;
       if (!listHasNull(test.in)) return inList ?? "1=0"; // `in: []` matches nothing, and says so
       return inList ? `(${inList} OR ${isEmpty(col)})` : isEmpty(col);
     }
@@ -119,7 +168,7 @@ export function where(clause) {
       // `NOT IN` is three-valued: a NULL column yields NULL, which is not TRUE, so the row is
       // dropped. `not:` deliberately avoids that with `IS NOT`; this branch has to say the same
       // thing out loud or the two disagree about a row that simply lacks the key.
-      const list = vals.map((v) => sqlValue(v)).join(", ");
+      const list = vals.map((v) => elementValue(v, field, "not_in")).join(", ");
       if (!listHasNull(test.not_in)) {
         // Rule 1: exclusion is null-safe. Bare `NOT IN` is three-valued — a NULL column yields
         // NULL, which is not TRUE — so a row that simply lacks the key would be dropped, while
@@ -139,7 +188,14 @@ export function where(clause) {
       // The complement of `field: null` must be the complement, not `IS NOT 'null'` — which
       // matches three of the four spellings of empty and so returns rows that ARE empty.
       if (test.not === null) return `NOT ${isEmpty(col)}`;
-      return `${col} IS NOT ${sqlValue(test.not)}`;
+      // THE 2026-08-07 SILENT TAUTOLOGY. `{not: ["ready","approved"]}` used to compile to
+      // `"status" IS NOT 'ready,approved'` — true for every row, so the filter excluded nothing
+      // and nothing said a word. `not_in:` is the operator that works, and it is three lines up.
+      return `${col} IS NOT ${comparisonValue(test.not, {
+        field,
+        operator: "`not:`",
+        hint: `use \`${field}: {not_in: [...]}\` to exclude several values`,
+      })}`;
     }
     throw new ShapeError(`unsupported filter on "${field}": ${JSON.stringify(test)}`);
   });

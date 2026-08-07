@@ -13,6 +13,51 @@ Entries are newest first, and each one answers the only question a consumer upgr
 
 ---
 
+## Unreleased
+
+### Changed — a container handed to a scalar comparison is now refused, not answered
+
+**This is a behaviour change, and it is the loud kind on purpose.** A `where:` clause that
+compares a column against a **list or a map** now throws `ShapeError` at compile time instead of
+producing a predicate. If a view of yours starts failing on upgrade, it was not filtering what you
+thought it was.
+
+Measured on the 45 real task rows of `GamifyEducation/gamify-platform`, 2026-08-07:
+
+| you wrote | before | after |
+| --- | --- | --- |
+| `status: {not: [ready, approved]}` | `"status" IS NOT 'ready,approved'` — **true for every row**, so the filter excluded nothing and the board it fed reported 42 where the answer was 33 | `ShapeError: filter on "status": \`not:\` compares one value and got a list … — use \`status: {not_in: [...]}\` to exclude several values` |
+| `status: [a, b]` | `ShapeError: unsupported filter` — named the value, not the fix | names `in:` |
+| `status: {in: [[a, b]]}` | `"status" IN ('a,b')` | `ShapeError … each entry must be a single value, so flatten it` |
+| `enum: {tags: [...]}` over a list column | **44 issues, one per row**, accusing every row — including the row whose tags were entirely inside the allowed set | **one** issue, aimed at the schema line: `enum compares whole values, and "tags" holds a list in 44 of 44 row(s) … those rows can never match, whatever they contain` |
+| `ref: {tags: sprints.id}` over a list column | 44 issues, same shape | one, same shape |
+
+`unique:` and `required:` are unchanged and deliberately so: neither coerces a container, so
+neither was ever lying.
+
+The refusals carry the fix, not just the refusal. `not_in` sits three lines above `not` in
+`src/shapes/sql.js`, and the author who hit this went and read the source to find it.
+
+### Added — `GD113 rule-compared-nothing`, and `rules` in the `validate` report
+
+`validate` reported zero issues for two unrelated reasons and spelled them identically: every row
+was asked and passed, or **no row was ever asked**. `validate()` now also returns `rules` — every
+(rule, column) it ran and how many rows each one actually compared — and `doctor` reads it as
+GD113. This is [I-002] one level down: I-002 is a *gate* that checked nothing, GD113 is a *rule*
+that checked nothing inside a full store.
+
+**`warn`, not `error`, and narrowed twice**, because a check that fires on correct code gets
+`|| true` appended to it in CI:
+
+- A column that is **written and blank** does not fire — a schema ahead of its data is how a store
+  grows. Only a column **no row carries at all** does. (Found by watching it fire on the shipped
+  pack's own quickstart.)
+- A table with **no rows** produces one finding, not one per rule.
+
+Silent on the real 4-table Gamify store; fires on `sprint:` → `sprnit:`.
+
+`gitdata validate` prints the same advisory line and **does not change its exit code** for it.
+
 ## 0.4.0
 
 ### Changed — `where:` now has one definition of "empty", and it changes which rows you get

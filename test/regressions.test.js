@@ -796,7 +796,10 @@ describe("loadSchemas", () => {
     const dir = mkdtempSync(join(tmpdir(), "gitdata-noschema-"));
     try {
       assert.deepEqual(loadSchemas(join(dir, "data")), []);
-      assert.deepEqual(validate({ dataRoot: join(dir, "data") }), { tables: [], issues: [] });
+      // `rules` is the non-vacuity half of the report: which (rule, column) pairs ran, and how
+      // many rows each one actually compared. No schemas means no rules, spelled out rather than
+      // left absent — the whole point of the field is that "nothing was checked" gets said.
+      assert.deepEqual(validate({ dataRoot: join(dir, "data") }), { tables: [], issues: [], rules: [] });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1487,5 +1490,115 @@ describe("column(): the shorthand renders identically to the object form", () =>
       await render(["id", "status"]),
       await render([{ from: "id" }, { from: "status" }]),
     );
+  });
+});
+
+/**
+ * 2026-08-07 — three failures in one day, one disease: a container reached a scalar comparison
+ * and gitdata answered anyway. All three were MEASURED on the 45 real task rows of
+ * GamifyEducation/gamify-platform before any of this existed.
+ *
+ * The unifying sentence, and the reason these live in one block: a comparison that returns the
+ * same answer for every possible input is not a check. Whether the constant is "pass" or "fail"
+ * is an accident of implementation — `enum` and `ref` failed EVERY row, `not:` passed every row,
+ * and none of the three asked a question.
+ */
+describe("a container handed to a scalar comparison", () => {
+  describe("where(): the silent tautology", () => {
+    test("`not:` with a list is refused, and names `not_in:`", () => {
+      assert.throws(
+        () => where({ status: { not: ["ready", "approved"] } }),
+        (e) =>
+          e instanceof ShapeError &&
+          /`not:` compares one value and got a list/.test(e.message) &&
+          /not_in/.test(e.message),
+      );
+    });
+
+    test("the exact defect: it used to compile to a predicate every row passes", () => {
+      // `lit()` reaches `String(["ready","approved"])` → 'ready,approved'. NOT the JSON spelling
+      // the post-mortem commit message claimed — a plausible-looking string is precisely why
+      // three separate readings of this defect each blamed the wrong branch.
+      assert.equal(lit(["ready", "approved"]), "'ready,approved'");
+      // The operator that works, and the one the message now points at.
+      assert.equal(
+        where({ status: { not_in: ["ready", "approved"] } }),
+        `("status" NOT IN ('ready', 'approved') OR "status" IS NULL)`,
+      );
+    });
+
+    test("bare equality and list elements are refused too, each naming its fix", () => {
+      assert.throws(() => where({ status: ["a", "b"] }), /use `status: \{in: \[\.\.\.\]\}`/);
+      assert.throws(() => where({ status: { in: [["a", "b"]] } }), /flatten it/);
+      assert.throws(() => where({ status: { not_in: [{ a: 1 }] } }), /flatten it/);
+    });
+
+    test("scalars are untouched — the guard must not narrow what already worked", () => {
+      assert.equal(where({ v: { not: 1 } }), `"v" IS NOT 1`);
+      assert.equal(where({ v: { not: null } }), `NOT ("v" IS NULL OR "v" IN ('null','None',''))`);
+      assert.equal(where({ v: { in: ["a", 2, true] } }), `"v" IN ('a', 2, 1)`);
+    });
+  });
+
+  describe("validate(): enum and ref used to accuse the rows", () => {
+    let fixture;
+    before(() => {
+      fixture = repo("gitdata-container-rule-");
+      fixture.write(
+        "data/_schema/cards.schema.yml",
+        ["kind: table-schema", "enum:", "  tags: [alpha, beta]", "ref:", "  tags: cards.id", ""].join("\n"),
+      );
+      // t1's tags are ENTIRELY inside the allowed set and it was accused anyway — the tell that
+      // the answer was constant rather than computed.
+      fixture.write("data/cards/t1.md", "---\nid: c1\ntags: [alpha, beta]\n---\n");
+      fixture.write("data/cards/t2.md", "---\nid: c2\ntags: [gamma]\n---\n");
+      fixture.write("data/cards/t3.md", "---\nid: c3\n---\n");
+    });
+    after(() => fixture.rm());
+
+    test("one finding aimed at the schema, not one per row aimed at the data", () => {
+      const { issues } = validate({ dataRoot: join(fixture.root, "data") });
+      assert.equal(issues.filter((i) => i.rule === "enum").length, 1);
+      assert.equal(issues.filter((i) => i.rule === "ref").length, 1);
+      const e = issues.find((i) => i.rule === "enum");
+      assert.equal(e.file, "cards.schema.yml"); // the schema line, not a row file
+      assert.match(e.message, /holds a list in 2 of 3 row\(s\)/);
+      assert.match(e.message, /can never match, whatever they contain/);
+    });
+
+    test("still non-zero — this re-aims the report, it does not soften the gate", () => {
+      const r = runCli(["validate", "--root", fixture.root]);
+      assert.equal(r.status, 1);
+    });
+  });
+
+  describe("validate(): a rule that compared nothing", () => {
+    let fixture;
+    before(() => {
+      fixture = repo("gitdata-inert-rule-");
+      fixture.write(
+        "data/_schema/cards.schema.yml",
+        // `ownre` is the typo the check exists for. `parent` is written-and-blank — a promise,
+        // not a mistake — and must NOT be reported, or `init --pack` warns on an untouched store.
+        ["kind: table-schema", "enum:", "  ownre: [me, you]", "ref:", "  parent: cards.id", ""].join("\n"),
+      );
+      fixture.write("data/cards/t1.md", "---\nid: c1\nparent: null\n---\n");
+    });
+    after(() => fixture.rm());
+
+    test("rules report how many rows they actually compared", () => {
+      const { rules } = validate({ dataRoot: join(fixture.root, "data") });
+      const owner = rules.find((r) => r.column === "ownre");
+      assert.deepEqual({ e: owner.evaluated, d: owner.declared, s: owner.skipped }, { e: 0, d: 0, s: 1 });
+      const parent = rules.find((r) => r.column === "parent");
+      assert.deepEqual({ e: parent.evaluated, d: parent.declared }, { e: 0, d: 1 });
+    });
+
+    test("the typo is named and the blank column is not — and neither changes the exit code", () => {
+      const r = runCli(["validate", "--root", fixture.root]);
+      assert.match(r.stdout, /no row carries "ownre"/);
+      assert.doesNotMatch(r.stdout, /"parent"/);
+      assert.equal(r.status, 0, "advisory: `validate`'s exit code still reports issues only");
+    });
   });
 });

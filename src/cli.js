@@ -248,7 +248,7 @@ async function cmdRollup({ root, data, check, diff, json }) {
 
 function cmdValidate({ root, data }) {
   const dataRoot = dataRootOf({ root, data });
-  const { tables, issues } = validate({ dataRoot });
+  const { tables, issues, rules } = validate({ dataRoot });
 
   if (tables.length === 0) {
     console.log(`  no schemas found — add ${relative(root, dataRoot)}/_schema/<table>.schema.yml`);
@@ -259,11 +259,24 @@ function cmdValidate({ root, data }) {
     console.log(`  ✗ ${i.table.padEnd(16)} ${String(i.file).padEnd(28)} ${i.rule.padEnd(9)} ${i.message}`);
   }
 
+  // A rule that compared no rows is neither a pass nor a failure, and printing only the issue
+  // count lets it hide inside "0 issues". Advisory only, and it never changes the exit code —
+  // `doctor` GD113 is where this carries a severity a consumer can act on, with the same
+  // narrowing (an absent column, not a blank one). See src/doctor.js:checkRuleReach.
+  const inert = rules.filter((r) => r.evaluated === 0 && r.declared === 0 && r.skipped > 0);
+  for (const r of inert) {
+    console.log(
+      `  ! ${r.table.padEnd(16)} ${"—".padEnd(28)} ${r.rule.padEnd(9)} ` +
+        `no row carries "${r.column}" — this rule compared nothing and cannot fail`,
+    );
+  }
+
+  const note = inert.length > 0 ? `, ${inert.length} rule(s) compared nothing` : "";
   if (issues.length > 0) {
-    console.log(`\n  ${issues.length} issue(s) across ${tables.length} table(s) checked.`);
+    console.log(`\n  ${issues.length} issue(s) across ${tables.length} table(s) checked${note}.`);
     return 1;
   }
-  console.log(`  ${tables.length} table(s) checked, 0 issues.`);
+  console.log(`  ${tables.length} table(s) checked, 0 issues${note}.`);
   return 0;
 }
 
