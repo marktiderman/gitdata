@@ -65,3 +65,41 @@ tension is with nothing in the laws — it is a compatibility question, not a de
 `validate` and `rollup --check` over an empty store exit non-zero, a test pins each, and the
 existing "0 clean / 1 drifted / 1 missing" contract for a NON-empty store is unchanged — proven by
 the current exit-code tests still passing untouched.
+
+## One level down — the RULE, inside a full store (shipped as GD113)
+
+The sentence above generalises, and the general form is the more useful one:
+
+> **A comparison that returns the same answer for every possible input is not a check.** Whether
+> the constant answer is "pass" or "fail" is an accident of implementation, not a fact about the
+> data.
+
+This row is that sentence at the level of a **gate**. The same defect exists at the level of a
+**rule**, and a full store hides it better, because the report is not empty — it is full of
+correct-looking passes with one meaningless entry among them.
+
+Measured, 2026-08-07, on 45 real task rows in `GamifyEducation/gamify-platform`. Three failures in
+one day, all one disease — **a container reached a scalar comparison and gitdata answered anyway**:
+
+| rule | what happened | which constant |
+| --- | --- | --- |
+| `enum: {tags: [...]}` | `Set(allowed).has(["prd-063","port-hygiene"])` | always FAIL — 44 issues, including the row whose tags were entirely allowed |
+| `ref: {envelope: envelopes.id}` | `Set(ids).has([...])` | always FAIL |
+| `where: {status: {not: [ready, approved]}}` | `String(list)` → `'ready,approved'`, so `IS NOT` | always PASS — filtered nothing, exited 0, and the board reported 42 for 33 |
+
+The third is the dangerous one and it is the same disease, which is why "cannot fail" is the wrong
+framing to build on: two of the three could *only* fail. **Constant** is the property; **vacuous**
+is one of its two spellings.
+
+What shipped:
+
+- **The coercion refuses.** `String(list)` produces a *plausible-looking* string, which is why
+  three separate readings of the third defect each blamed the wrong branch. Refusal happens where
+  the information is lost — one function — rather than in each operator.
+- **`validate()` returns `rules`**: every (rule, column) and how many rows it actually compared.
+- **`GD113 rule-compared-nothing`**, at `warn`, narrowed so it never fires on a schema written
+  ahead of its data.
+
+**This does not close this row.** GD113 needs `doctor` to be run, and I-002's own complaint is that
+the consumers most likely to be mis-rooted are the ones least likely to have adopted a second
+command. The exit-code question above is still open and still the harder half.

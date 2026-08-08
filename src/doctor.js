@@ -77,6 +77,7 @@ export const CHECKS = [
   { id: "GD110", name: "validate-issues", level: "error", scope: "store" },
   { id: "GD111", name: "measured-without-provenance", level: "warn", scope: "store" },
   { id: "GD112", name: "row-contract-reimplemented", level: "warn", scope: "repo" },
+  { id: "GD113", name: "rule-compared-nothing", level: "warn", scope: "store" },
 ];
 
 export const CHECK_IDS = CHECKS.map((c) => c.id);
@@ -688,6 +689,74 @@ function checkValidate({ dataRoot }) {
 }
 
 /**
+ * GD113 — a schema rule that compared no rows at all.
+ *
+ * `validate` reports zero issues for two unrelated reasons and spells them identically: every row
+ * was asked and passed, or **no row was ever asked**. `enum: {ownre: [...]}` — one transposed
+ * letter — is skipped by every row's missing-value guard and reports a clean pass forever. So does
+ * a rule on a column that has not been populated yet, and a rule on an empty table.
+ *
+ * This is I-002 one level down: I-002 is a GATE that checked nothing; this is a RULE that checked
+ * nothing inside a full store. Same sentence, smaller scope.
+ *
+ * WARN, NOT ERROR, and that is the whole design of this check. A schema written ahead of its data
+ * is the normal way a store grows, so a rule on a column nobody has filled in yet is CORRECT CODE.
+ * A check that fires on correct code gets `|| true` appended to it in CI, at which point it is
+ * worse than silence. `warn` means `--check` stays green, `--strict` goes red for the consumer who
+ * asks for it, and `_gitdata.yml` can silence it per store WITH A STATED REASON.
+ *
+ * TWO NARROWINGS, both MEASURED rather than guessed — each was found by watching this check fire
+ * on something correct:
+ *
+ * 1. **Empty value ≠ absent column.** The shipped pack's own quickstart declares
+ *    `ref: {parent: features.id}` over one row whose `parent:` is written and blank. Firing there
+ *    turned `init --pack` into an immediate warning on a store nobody had touched. So the finding
+ *    needs the column to appear in NO row's frontmatter — `enum: {ownre: [...]}`, one transposed
+ *    letter, a column that does not exist. A key someone wrote and left empty is a promise, not a
+ *    typo.
+ * 2. **An empty table is ONE fact, not one per rule.** A table with no rows makes every rule on it
+ *    vacuous at once; N findings for one cause is how a useful check becomes noise.
+ *
+ * `required:` never appears here at all: it asks about ABSENCE, so it evaluates every row by
+ * construction and cannot be vacuous.
+ */
+function checkRuleReach({ dataRoot }) {
+  let result;
+  try {
+    result = validate({ dataRoot });
+  } catch {
+    // GD110 already reports the failure with its message; a second copy is noise.
+    return { findings: [], skipped: ["validate could not run — see GD110"] };
+  }
+  if (result.tables.length === 0) return { findings: [], skipped: ["no schemas under data/_schema/"] };
+
+  const at = (table) => `data/_schema/${table}.schema.yml`;
+  const findings = [];
+
+  const emptyTables = [...new Set(result.rules.filter((r) => r.evaluated + r.skipped === 0).map((r) => r.table))];
+  for (const table of emptyTables.sort()) {
+    const n = result.rules.filter((r) => r.table === table).length;
+    findings.push(
+      finding("GD113", `${table}: has no rows, so all ${n} of its schema rules compared nothing`, at(table)),
+    );
+  }
+
+  const empty = new Set(emptyTables);
+  for (const r of result.rules) {
+    if (empty.has(r.table) || r.evaluated > 0 || r.declared > 0) continue;
+    findings.push(
+      finding(
+        "GD113",
+        `${r.table}: \`${r.rule}\` on "${r.column}" compared 0 of ${r.skipped} row(s) — no row carries ` +
+          `that key at all, so the rule cannot fail and its pass means nothing. Check the spelling.`,
+        at(r.table),
+      ),
+    );
+  }
+  return { findings };
+}
+
+/**
  * GD111 — a table declared `class: measured` whose rows carry no provenance.
  *
  * A measured table is rewritten wholesale by a machine, so a hand-authored row in one is destroyed
@@ -819,6 +888,7 @@ const RUNNERS = {
   GD110: checkValidate,
   GD111: checkMeasuredProvenance,
   GD112: checkRowContract,
+  GD113: checkRuleReach,
 };
 
 // ---------------------------------------------------------------------------------------------

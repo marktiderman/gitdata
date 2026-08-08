@@ -38,6 +38,7 @@ still means the same thing in a year.
 | `GD109` | rollup-drift | error | delegated `rollup --check`: a view is drifted or missing |
 | `GD110` | validate-issues | error | delegated `validate`: a row breaks its table's schema |
 | `GD111` | measured-without-provenance | warn | a table declared `class: measured` whose rows carry none of the provenance columns that store declared |
+| `GD113` | rule-compared-nothing | warn | a schema rule that compared **zero rows**, because no row carries the column at all, or the table is empty. It cannot fail, so its pass says nothing. A column that is written-and-blank does **not** fire — see below |
 | `GD112` | row-contract-reimplemented | warn | a source file that looks like a hand-rolled copy of `isRowFile` instead of importing it. **A heuristic** — see below |
 
 ## Severity policy — `data/_gitdata.yml`
