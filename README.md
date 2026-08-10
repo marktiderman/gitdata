@@ -55,6 +55,7 @@ gitdata doctor                           # one compliance report — always exit
 gitdata doctor --check                   # the one CI line: exit 1 on any error finding
 gitdata emit codeowners                  # write .github/CODEOWNERS from data/*/_owners.yml
 gitdata emit codeowners --check          # report drift, write nothing
+gitdata emit refresh                     # scaffold the single-writer view-refresh workflow (docs/MERGES.md)
 gitdata stores                           # every data/ trellis in the repo, and what is in it
 gitdata packs                            # what's available to install
 ```
@@ -98,6 +99,13 @@ Everything `init` writes is **yours** — edit the template, rewrite the view, a
 
 `--check` is the driftproof guarantee. Put it in CI: a hand-edited board, or a source edit that was
 never rolled up, fails the build. It exits non-zero so **you** decide whether that blocks a merge.
+
+One consequence to decide deliberately: a rendered view aggregates many rows into one file, so if
+**every PR** must commit a fresh render, every pair of open PRs conflicts on it — text merge cannot
+combine two renders of the same artifact. The way out is structural, not a cleverer merge: PRs
+carry rows only, and one workflow regenerates views on the integration branch. The doctrine, the
+mechanical conflict resolution (it is always `gitdata rollup`, never a hand-merge), and the
+`emit refresh` scaffold that sets it up: **[docs/MERGES.md](docs/MERGES.md)**.
 
 ## A view
 

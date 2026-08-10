@@ -33,6 +33,11 @@ export { findStores, describeStores } from "./stores.js";
 // whole output file (src/emit-codeowners.js:138). It does not merge, and it does not append.
 export { emitCodeowners, codeownersLines, renderCodeowners, EmitError } from "./emit-codeowners.js";
 
+// Scaffold the single-writer view-refresh workflow — the structural fix for derived-view merge
+// conflicts (docs/MERGES.md). NOTE the different contract from emitCodeowners: this is a scaffold
+// the consumer owns, so emitRefresh never overwrites an existing file and nothing drift-checks it.
+export { emitRefresh, renderRefreshWorkflow } from "./emit-refresh.js";
+
 // The pipeline, for consumers building their own tooling on top: markdown → tables → SQLite.
 export { load, LoadError } from "./load.js";
 // The row contract, for consumers that write into `data/` rather than only read it: which files

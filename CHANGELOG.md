@@ -15,6 +15,49 @@ Entries are newest first, and each one answers the only question a consumer upgr
 
 ## Unreleased
 
+### Added — `emit refresh`, docs/MERGES.md, and a conflict-marker callout: derived views stop being a conflict engine
+
+**No existing output changes.** `rollup`, `rollup --check` on clean or ordinarily-drifted trees,
+and both existing emitters render byte-identical results. What is new is a command, a document,
+and one extra paragraph in a failure report that previously left you to rediscover the doctrine
+yourself.
+
+The defect this answers is structural, and it was measured before it was theorized. A rolled-up
+view aggregates many rows into one rendered file, so a consumer that marks `rollup --check` as a
+required PR check forces **every PR to commit a fresh render of the same artifact** — and any two
+PRs open at once then conflict the moment the first one merges, because text merge cannot combine
+two renders. Measured on `GamifyEducation/gamify-platform`, 2026-08-10: four PRs open
+concurrently (#1529, #1533, #1539, #1546), targeting two different integration branches, **all
+four un-mergeable on the same rendered views** (`tasks-board.md`, `unproven-claims.md`, and on
+two of them `contract-drift.md`) — files no author had hand-written, conflicting for no reason
+other than that the check made every writer render the same aggregate.
+
+Three pieces:
+
+- **`gitdata emit refresh`** scaffolds `.github/workflows/gitdata-refresh.yml`: a `refresh` job
+  that makes the integration branch the **single writer** (regenerate on push, commit the delta
+  under the view directories, push with a converging retry loop), and a `guard` job that fails a
+  PR changing rendered `.md` under a view directory relative to its base. Repeatable flags —
+  `--branch`, `--run`, `--views` — shape it; defaults are `main`, `npx @marktiderman/gitdata
+  rollup`, `data/_views`. **It follows `init`'s contract, not `rollup`'s**: the file is a
+  scaffold the consumer owns (their runtime, their pins), so it is never overwritten and nothing
+  drift-checks it — `--check` on this subcommand is refused with an explanation, not ignored.
+- **`docs/MERGES.md`** is the doctrine in one page: why the conflicts happen, the mechanical
+  resolution (take either side, `gitdata rollup`, `git add`, continue — a hand-merged render is
+  bytes no row set ever produced, and the next `--check` rejects it), the single-writer pattern
+  and what the PR gate becomes under it (`validate` + "rollup exits zero" + the guard), and the
+  costs stated plainly (feature-branch views go stale by that branch's own edits; two long-lived
+  branches merging is still the serial, mechanical case).
+- **`rollup --check` now names the one drift with a different cure.** When a bad view's committed
+  bytes carry `<<<<<<< ` conflict markers, the report says so and says what to do — previously it
+  printed the generic "run `gitdata rollup` and commit the result", which is correct but silent
+  about the trap the reader is standing in: resolving the conflict by hand first, which produces
+  exactly the drift the check then fails.
+
+Programmatic surface: `emitRefresh` and `renderRefreshWorkflow` are exported. `renderRefreshWorkflow`
+is deterministic — a pure function of the three lists, argv order preserved, duplicates collapsed,
+no timestamps — per law 4.
+
 ### Changed — a container handed to a scalar comparison is now refused, not answered
 
 **This is a behaviour change, and it is the loud kind on purpose.** A `where:` clause that

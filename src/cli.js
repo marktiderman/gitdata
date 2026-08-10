@@ -11,6 +11,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 
 import { doctor, exitCode } from "./doctor.js";
 import { emitCodeowners } from "./emit-codeowners.js";
+import { emitRefresh } from "./emit-refresh.js";
 import { init, listPacks } from "./init.js";
 import { describeTables, runQuery } from "./introspect.js";
 import { diffLines, formatDiff, rollup } from "./rollup.js";
@@ -28,6 +29,10 @@ const USAGE = `gitdata — docs as data in git
                                                           one compliance report: engine, install, drift, schemas
   gitdata emit codeowners [--check] [--root <dir>] [--data <dir>] [--out <path>]
                                                           emit .github/CODEOWNERS from <data>/*/_owners.yml
+  gitdata emit refresh [--branch <name>]... [--run <cmd>]... [--views <dir>]... [--root <dir>] [--out <path>]
+                                                          scaffold the single-writer view-refresh workflow — the
+                                                          structural fix for derived-view merge conflicts
+                                                          (docs/MERGES.md); a scaffold you own, never overwritten
   gitdata stores [--json] [--root <dir>]                 every data/ trellis below <dir>, and what is in it
   gitdata tables [--json] [--root <dir>] [--data <dir>]  list tables, columns, inferred types, row counts
   gitdata query "<SQL>" [--json] [--root <dir>] [--data <dir>]
@@ -66,6 +71,9 @@ The doctor check catalog, with every ID and its default severity: docs/DOCTOR.md
 // exactly what to skip past — `query`'s SQL text is the one positional argument any command takes.
 const BOOL_FLAGS = ["--check", "--diff", "--json", "--strict", "--offline"];
 const VALUE_FLAGS = [["--root", "root"], ["--data", "data"], ["--pack", "pack"], ["--out", "out"]];
+// Flags that may repeat, each occurrence appending — `emit refresh` takes lists of branches,
+// commands and view directories, and comma-splitting would corrupt a command containing one.
+const MULTI_FLAGS = [["--branch", "branches"], ["--run", "runs"], ["--views", "views"]];
 
 function parseArgs(argv) {
   // A subcommand is argv[1] when the command itself takes one and it isn't a flag — `emit
@@ -88,6 +96,16 @@ function parseArgs(argv) {
   };
   const consumed = new Set([0]);
   if (sub) consumed.add(1);
+  for (const [flag, key] of MULTI_FLAGS) {
+    args[key] = [];
+    argv.forEach((a, i) => {
+      if (a !== flag) return;
+      if (!argv[i + 1] || argv[i + 1].startsWith("--")) throw new Error(`${flag} requires a value`);
+      args[key].push(argv[i + 1]);
+      consumed.add(i);
+      consumed.add(i + 1);
+    });
+  }
   for (const [flag, key] of VALUE_FLAGS) {
     const i = argv.indexOf(flag);
     if (i === -1) continue;
@@ -240,6 +258,18 @@ async function cmdRollup({ root, data, check, diff, json }) {
   const bad = results.filter(isBad);
   if (check && bad.length > 0) {
     console.log(`\n  ${bad.length} view(s) out of date — run \`gitdata rollup\` and commit the result.`);
+    // The one drift with a different cure. A committed view carrying git conflict markers means
+    // somebody merged the render instead of the rows — and hand-merging it "correctly" is not
+    // possible, because the only correct content is a fresh render of the merged rows.
+    const conflicted = bad.filter((r) => typeof r.committed === "string" && /^<{7} /m.test(r.committed));
+    if (conflicted.length > 0) {
+      console.log(
+        `  ${conflicted.length} of them carr${conflicted.length === 1 ? "ies" : "y"} git conflict markers. ` +
+          "A derived view is never merged by hand:\n" +
+          "  the rows are what merged; the view is a render of them. Run `gitdata rollup`, `git add` the\n" +
+          "  result, and continue the merge. To stop this recurring, see docs/MERGES.md (`emit refresh`).",
+      );
+    }
     return 1;
   }
   console.log(`\n  ${results.length} view(s) ${check ? "checked" : "rolled up"}.`);
@@ -371,6 +401,38 @@ async function cmdEmitCodeowners({ root, data, check, out }) {
   return 0;
 }
 
+/**
+ * `emit refresh` follows `init`'s contract, not `rollup`'s: the workflow is a SCAFFOLD the
+ * consumer owns and adapts (their runtime, their pins), so it is written once and never
+ * overwritten — and `--check` is refused rather than ignored, because accepting a flag that
+ * implies drift-checking on a file we deliberately do not drift-check would be a lie.
+ */
+function cmdEmitRefresh({ root, out, check, branches, runs, views }) {
+  if (check) {
+    throw new Error(
+      "emit refresh writes a scaffold you own — it is not drift-checked, so --check has nothing to compare. " +
+        "Edit the file in place, or delete it and re-emit.",
+    );
+  }
+  const outPath = resolve(root, out ?? ".github/workflows/gitdata-refresh.yml");
+  const result = emitRefresh({ outPath, branches, runs, views });
+  const rel = relative(root, result.out);
+
+  if (result.status === "exists") {
+    console.log(`  · ${rel} (exists — left alone)`);
+    console.log("\n  The scaffold became yours when it was first written — edit it in place, or delete and re-emit.");
+    return 0;
+  }
+
+  console.log(`  ✎ ${rel} written`);
+  console.log("\nNext:");
+  console.log("  1. Adapt the setup steps to your runtime — the scaffold assumes npx on a stock runner");
+  console.log("  2. Commit and push; the refresh job activates on the branches it names");
+  console.log("  3. The guard job only fails — make it a required check if you want it to block");
+  console.log("     (why this workflow exists, and what it replaces: docs/MERGES.md)");
+  return 0;
+}
+
 async function cmdTables({ root, data, json }) {
   const dataRoot = dataRootOf({ root, data });
   const tables = await describeTables(dataRoot);
@@ -438,6 +500,7 @@ try {
   if (args.command === "doctor") process.exit(await cmdDoctor(args));
   if (args.command === "stores") process.exit(cmdStores(args));
   if (args.command === "emit" && args.sub === "codeowners") process.exit(await cmdEmitCodeowners(args));
+  if (args.command === "emit" && args.sub === "refresh") process.exit(cmdEmitRefresh(args));
   if (args.command === "packs") process.exit(cmdPacks());
   if (args.command === "tables") process.exit(await cmdTables(args));
   if (args.command === "query") process.exit(await cmdQuery(args));

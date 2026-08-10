@@ -13,6 +13,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, test } from "node:test";
 
+import { parse as parseYaml } from "yaml";
+
 const CLI = fileURLToPath(new URL("../src/cli.js", import.meta.url));
 const PKG = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
@@ -439,5 +441,163 @@ describe("tables and query, spawned against a real fixture repo", () => {
   test("query rejects multiple statements separated by ';'", () => {
     const r = run(["query", "SELECT 1; DROP TABLE things", "--root", tRoot]);
     assert.notEqual(r.status, 0);
+  });
+});
+
+/**
+ * `emit refresh` — the single-writer scaffold (docs/MERGES.md).
+ *
+ * The contract under test is init's, not rollup's: written once, never overwritten, and --check
+ * refused rather than ignored. The rendered YAML is additionally parsed, because a workflow that
+ * does not parse fails in the one place the consumer cannot run locally.
+ */
+describe("emit refresh", () => {
+  test("default emit: writes the workflow, parses as YAML, carries both jobs and the defaults", () => {
+    const root = mkdtempSync(join(tmpdir(), "gitdata-cli-refresh-"));
+    try {
+      const r = run(["emit", "refresh", "--root", root]);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /✎ .github\/workflows\/gitdata-refresh.yml written/);
+
+      const out = join(root, ".github/workflows/gitdata-refresh.yml");
+      assert.ok(existsSync(out));
+      const text = readFileSync(out, "utf8");
+
+      // Parses — a scaffold with a YAML error is worse than no scaffold.
+      const doc = parseYaml(text);
+      assert.deepEqual(doc.on.push.branches, ["main"]);
+      assert.ok(doc.on.pull_request !== undefined, "guard needs the pull_request trigger");
+      assert.equal(doc.permissions.contents, "write");
+      assert.ok(doc.jobs.refresh, "refresh job missing");
+      assert.ok(doc.jobs.guard, "guard job missing");
+      assert.match(doc.jobs.refresh.if, /push/);
+      assert.match(doc.jobs.guard.if, /pull_request/);
+
+      // The defaults: scoped package (never the unscoped name), default store, both hook bypasses.
+      assert.match(text, /npx @marktiderman\/gitdata rollup/);
+      assert.match(text, /git add -A -- "data\/_views"/);
+      assert.match(text, /'data\/_views\/\*\.md'/);
+      assert.match(text, /git commit --no-verify/);
+      assert.match(text, /git push --no-verify/);
+      assert.match(text, /\[skip ci\]/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("repeatable flags shape it; determinism: same flags render identical bytes in two repos", () => {
+    const flags = [
+      "--branch", "main",
+      "--branch", "release/**",
+      "--run", "npm run views:one",
+      "--run", "npm run views:two",
+      "--views", "data/_views",
+      "--views", "other/data/_views",
+    ];
+    const roots = [mkdtempSync(join(tmpdir(), "gitdata-cli-refresh-a-")), mkdtempSync(join(tmpdir(), "gitdata-cli-refresh-b-"))];
+    try {
+      const texts = roots.map((root) => {
+        const r = run(["emit", "refresh", "--root", root, ...flags]);
+        assert.equal(r.status, 0, r.stderr);
+        return readFileSync(join(root, ".github/workflows/gitdata-refresh.yml"), "utf8");
+      });
+      assert.equal(texts[0], texts[1], "law 4: identical inputs must render identical bytes");
+
+      const doc = parseYaml(texts[0]);
+      assert.deepEqual(doc.on.push.branches, ["main", "release/**"]);
+      // Commands keep argv order — they execute in sequence, so order is meaning.
+      const refreshRun = doc.jobs.refresh.steps.at(-1).run;
+      assert.ok(refreshRun.indexOf("npm run views:one") < refreshRun.indexOf("npm run views:two"));
+      // Both stores ride every shell line that names view paths.
+      assert.match(refreshRun, /git add -A -- "data\/_views" "other\/data\/_views"/);
+      assert.match(doc.jobs.guard.steps.at(-1).run, /'data\/_views\/\*\.md' 'other\/data\/_views\/\*\.md'/);
+    } finally {
+      roots.forEach((root) => rmSync(root, { recursive: true, force: true }));
+    }
+  });
+
+  test("an existing file is left alone whatever it contains — the scaffold is the consumer's", () => {
+    const root = mkdtempSync(join(tmpdir(), "gitdata-cli-refresh-own-"));
+    try {
+      const out = join(root, ".github/workflows/gitdata-refresh.yml");
+      mkdirSync(join(root, ".github/workflows"), { recursive: true });
+      writeFileSync(out, "name: hand-tuned\n", "utf8");
+
+      const r = run(["emit", "refresh", "--root", root]);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /exists — left alone/);
+      assert.equal(readFileSync(out, "utf8"), "name: hand-tuned\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("--check is refused with an explanation, not ignored", () => {
+    const root = mkdtempSync(join(tmpdir(), "gitdata-cli-refresh-check-"));
+    try {
+      const r = run(["emit", "refresh", "--check", "--root", root]);
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /scaffold you own/);
+      assert.ok(!existsSync(join(root, ".github/workflows/gitdata-refresh.yml")), "--check must write nothing");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a views directory that could not be inside the repo is refused", () => {
+    const root = mkdtempSync(join(tmpdir(), "gitdata-cli-refresh-views-"));
+    try {
+      for (const bad of ["../elsewhere", "/abs/path"]) {
+        const r = run(["emit", "refresh", "--root", root, "--views", bad]);
+        assert.equal(r.status, 1, `--views ${bad} must be refused`);
+        assert.match(r.stderr, /relative directory inside the repo/);
+      }
+      // A flag with no value is the parser's refusal, same as the other value flags.
+      const dangling = run(["emit", "refresh", "--root", root, "--branch"]);
+      assert.equal(dangling.status, 1);
+      assert.match(dangling.stderr, /--branch requires a value/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * The conflict-marker callout in `rollup --check` — the one drift with a different cure.
+ *
+ * The trap it names: a merge leaves `<<<<<<<` markers in a rendered view, somebody resolves them
+ * by hand, and the check then fails on bytes no row set ever produced. The report must say the
+ * cure is regeneration, and say it on the drifted view that actually carries markers.
+ */
+describe("rollup --check on a view carrying conflict markers", () => {
+  test("names the markers and points at the doctrine", () => {
+    const root = mkdtempSync(join(tmpdir(), "gitdata-cli-conflict-"));
+    try {
+      assert.equal(run(["init", "--pack", "feature-management", "--root", root]).status, 0);
+      copyFileSync(join(root, "data/features/_template.md"), join(root, "data/features/F-001--first.md"));
+      assert.equal(run(["rollup", "--root", root]).status, 0);
+
+      const board = join(root, "data/_views/features-board.md");
+      const clean = readFileSync(board, "utf8");
+      writeFileSync(
+        board,
+        `<<<<<<< HEAD\n${clean}=======\n${clean}>>>>>>> other-branch\n`,
+        "utf8",
+      );
+
+      const r = run(["rollup", "--check", "--root", root]);
+      assert.equal(r.status, 1);
+      assert.match(r.stdout, /carries git conflict markers/);
+      assert.match(r.stdout, /never merged by hand/);
+      assert.match(r.stdout, /docs\/MERGES\.md/);
+
+      // An ordinary drift still reports WITHOUT the callout — the hint is for the trap, not noise.
+      writeFileSync(board, clean + "\nvandalism\n", "utf8");
+      const plain = run(["rollup", "--check", "--root", root]);
+      assert.equal(plain.status, 1);
+      assert.ok(!/conflict markers/.test(plain.stdout), "no markers, no callout");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

@@ -55,7 +55,14 @@ const packDirs = () =>
     : [];
 
 /** Public prose that a new reader meets first. Vocabulary leaks here as readily as in code. */
-const PUBLIC_DOCS = ["README.md", "SHAPES.md", "CONTRIBUTING.md", "docs/ARCHITECTURE.md", "docs/DOCTOR.md"];
+const PUBLIC_DOCS = [
+  "README.md",
+  "SHAPES.md",
+  "CONTRIBUTING.md",
+  "docs/ARCHITECTURE.md",
+  "docs/DOCTOR.md",
+  "docs/MERGES.md",
+];
 
 /**
  * Words that name somebody's data rather than a mechanism. A consumer's vocabulary in the engine
