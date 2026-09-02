@@ -15,6 +15,35 @@ Entries are newest first, and each one answers the only question a consumer upgr
 
 ## Unreleased
 
+### Added — a row may be a `.yml` file, not only a `.md` one
+
+**Nothing you have today changes.** This widens what the loader accepts; it narrows nothing. Every
+`.md` row loads exactly as before, `_body` included.
+
+What is new: `data/<table>/<row>.yml` is a row. The YAML document IS the columns — no fences, no
+body — and it loads into the same table, is checked by the same `data/_schema/<table>.schema.yml`,
+and feeds the same views as its `.md` neighbours. `_body` is `""` for such a row, so
+`md_section(_body, ...)` answers "no such section" rather than failing.
+
+For a store whose rows are contract and no prose, this is the difference between three lines of
+ceremonial fence per row and none. Before it, renaming those rows to `.yml` made every one of them
+invisible to `load()` — with no error and no count, so `gitdata validate` reported a clean pass
+having read nothing.
+
+| | before | after |
+| --- | --- | --- |
+| `data/things/T-001.yml` | not a row; silently ignored | a row of `things` |
+| `_template.yml`, `.hidden.yml`, `readme.yml`, `_owners.yml` | not rows | still not rows |
+| `notes.yaml` | not a row | still not a row — `.yml` is the one spelling |
+| `data/things/T-001.md` **and** `T-001.yml` | one row silently won | `LoadError` naming both paths |
+| `out: data/things/board.yml` in a view | passed `doctor` | GD103 error — the loader now reads it back as a row |
+
+**Two things to check on upgrade.** A `.yml` file you keep *inside* a table directory for some
+other purpose is now data: prefix it with `_` (the reservation this project already uses for
+`_owners.yml`) and it goes back to being ignored. And a view whose `out:` writes a `.yml` into a
+table directory now fails GD103, which is the check working — that artifact was always going to
+come back as a row.
+
 ### Changed — a container handed to a scalar comparison is now refused, not answered
 
 **This is a behaviour change, and it is the loud kind on purpose.** A `where:` clause that

@@ -3,11 +3,18 @@
  *
  * folder = table · file = row · frontmatter = columns.
  *
- * Non-rows, matching the roller's existing reservation: `_`-prefixed files (`_template.md`),
- * `README.md` (case-insensitively — `ReadMe.md` must not be parsed as a row), anything not
- * `.md`, and `_`-prefixed directories (`_schema/`, `_views/`).
+ * A row is spelled one of two ways, and both load to the same shape: `<row>.md` is fenced
+ * frontmatter plus a prose body, `<row>.yml` is the YAML document alone with an empty body. The
+ * frontmatter of a `.md` row IS a YAML document, so a store whose rows carry no prose keeps three
+ * lines of fence around one for nothing. Which two files never are: `<row>.md` and `<row>.yml`
+ * together, because a row is its path without the extension and one row has one file.
  *
- * A table's rows may be **nested**: `data/sessions/2026/01/x.md` is a row of `sessions`, not of a
+ * Non-rows, matching the roller's existing reservation: `_`-prefixed files (`_template.md`,
+ * `_owners.yml`), `README.md`/`readme.yml` (case-insensitively — `ReadMe.md` must not be parsed as
+ * a row), anything that is neither `.md` nor `.yml`, and `_`-prefixed directories (`_schema/`,
+ * `_views/`).
+ *
+ * A table's rows may be **nested**: `data/sessions/2026/01/x.yml` is a row of `sessions`, not of a
  * table called `2026`. Sharding by date is the ordinary way a table outgrows one flat directory,
  * and reading only the top level dropped those rows with no error and no count — the failure mode
  * this project exists to prevent, in the loader itself.
@@ -16,11 +23,30 @@
  * order — that determinism is what makes byte-identical drift checking possible.
  */
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { join, sep } from "node:path";
+import { extname, join, sep } from "node:path";
 
-import { parseFrontmatter } from "./frontmatter.js";
+import { parseFrontmatter, parseYamlDocument } from "./frontmatter.js";
 
 export class LoadError extends Error {}
+
+/**
+ * The two spellings of a row, and how each becomes `{ data, body }`.
+ *
+ * One list, read by the predicate, the walk, and the parse dispatch alike, so a third spelling can
+ * never be accepted by one of them and dropped by another — which is the drift this file exists to
+ * refuse. `.yaml` is deliberately absent: two spellings of one extension is two files claiming one
+ * row, and the collision rule below would then be the only thing standing between a store and a
+ * coin flip.
+ */
+const ROW_FORMATS = {
+  ".md": parseFrontmatter,
+  ".yml": parseYamlDocument,
+};
+
+const ROW_EXTENSIONS = Object.keys(ROW_FORMATS);
+
+/** `README` documents its table in either spelling, and participates in neither. */
+const RESERVED_NAMES = new Set(ROW_EXTENSIONS.map((ext) => `readme${ext}`));
 
 /**
  * What counts as a row. Exported because it is a contract, not a detail.
@@ -38,10 +64,10 @@ export class LoadError extends Error {}
  * that disagrees with the loader would recreate, inside this file, the drift exporting it prevents.
  */
 export const isRowFile = (name) =>
-  name.endsWith(".md") &&
+  ROW_EXTENSIONS.some((ext) => name.endsWith(ext)) &&
   !name.startsWith("_") &&
   !name.startsWith(".") &&
-  name.toLowerCase() !== "readme.md";
+  !RESERVED_NAMES.has(name.toLowerCase());
 
 /**
  * Classify an entry by what it points AT, not what it is: a Dirent for a symlink reports neither
@@ -77,6 +103,39 @@ function rowPaths(dir, prefix = "", seen = new Set([realpathSync(dir)])) {
 }
 
 /**
+ * Two files claiming one row.
+ *
+ * A row's identity is its path under the table WITHOUT the extension: that is what `_file` names,
+ * what a schema's `unique:` reads as one row, and what an author renames when they move a row from
+ * one spelling to the other. So `F-001.md` beside `F-001.yml` is not two rows, it is one row with
+ * two contracts, and whichever the loader read second would win by sort order — a coin flip over
+ * which file is live, with the loser still being edited by whoever believes it is the row.
+ *
+ * Refused here rather than in `load()` so that every published entry point — the loader, the
+ * enumerator a consumer rewrites a table by, and the containment check — answers the same way. A
+ * table that will not load is a table nobody should be enumerating for a wholesale rewrite either.
+ *
+ * Two shards holding `x.md` and `x.yml` are two rows and stay legal: their paths differ, so their
+ * identities do.
+ */
+function assertOneFilePerRow(dir, paths) {
+  const byRow = new Map();
+  for (const rel of paths) {
+    const id = rel.slice(0, rel.length - extname(rel).length);
+    const first = byRow.get(id);
+    // Sorted input, so the pair is always named in the same order — the message is part of the
+    // artifact a CI log holds, and determinism is the product.
+    if (first !== undefined) {
+      throw new LoadError(
+        `${dir}: "${first}" and "${rel}" are two files for one row — a row is its path without the extension, so keep one and delete the other`,
+      );
+    }
+    byRow.set(id, rel);
+  }
+  return paths;
+}
+
+/**
  * Every row file under a table directory, relative to it, in load order — shards included.
  *
  * `isRowFile` alone is only half the contract. The other half is that a table may nest, so a
@@ -88,7 +147,7 @@ function rowPaths(dir, prefix = "", seen = new Set([realpathSync(dir)])) {
  * @returns {string[]}
  */
 export function rowFilesIn(dir) {
-  return rowPaths(dir);
+  return assertOneFilePerRow(dir, rowPaths(dir));
 }
 
 /**
@@ -120,7 +179,7 @@ export function rowFilesIn(dir) {
 export function escapedRowFiles(dir) {
   const root = realpathSync(dir);
   const inside = root.endsWith(sep) ? root : root + sep;
-  return rowPaths(dir).filter((rel) => {
+  return rowFilesIn(dir).filter((rel) => {
     let real;
     try {
       real = realpathSync(join(dir, rel));
@@ -131,7 +190,8 @@ export function escapedRowFiles(dir) {
   });
 }
 
-/** @returns {Map<string, {name: string, rows: Array<{_file: string, _body: string}>}>} */
+/** @returns {Map<string, {name: string, rows: Array<{_file: string, _body: string}>}>} — `_body`
+ * is the prose after a `.md` row's frontmatter, and `""` for a `.yml` row, which has none. */
 export function load(root) {
   const tables = new Map();
 
@@ -141,9 +201,12 @@ export function load(root) {
     const dir = join(root, entry.name);
 
     const rows = [];
-    for (const file of rowPaths(dir)) {
+    // The published enumerator, not a second walk beside it: `rowFilesIn` is what a consumer is
+    // told answers the loader's question, so the loader had better be asking it.
+    for (const file of rowFilesIn(dir)) {
       const path = join(dir, file);
-      const { data, body } = parseFrontmatter(readFileSync(path, "utf8"), {
+      const parse = ROW_FORMATS[extname(file)];
+      const { data, body } = parse(readFileSync(path, "utf8"), {
         file: `${entry.name}/${file}`,
       });
       // `_file` carries the path relative to the table, so two shards may hold same-named files
