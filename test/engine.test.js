@@ -9,10 +9,11 @@ import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 
 import { parseFrontmatter, FrontmatterError } from "../src/frontmatter.js";
-import { escapedRowFiles, isRowFile, load, rowFilesIn } from "../src/load.js";
+import { escapedRowFiles, isRowFile, load, LoadError, rowFilesIn } from "../src/load.js";
 import { project, query } from "../src/project.js";
 import { renderTemplate, RenderError } from "../src/render.js";
 import { rollup } from "../src/rollup.js";
+import { validate } from "../src/validate.js";
 
 let root;
 
@@ -63,7 +64,7 @@ describe("load", () => {
     assert.ok(!isRowFile("_template.md"), "`_` is the reservation for non-rows");
     assert.ok(!isRowFile("README.md"), "a table documents itself without becoming a row");
     assert.ok(!isRowFile("ReadMe.md"), "case-insensitively — the loader's docstring says so");
-    assert.ok(!isRowFile("notes.txt"), "the format does not move: rows are markdown");
+    assert.ok(!isRowFile("notes.txt"), "the format does not move: a row is markdown or YAML, nothing else");
     assert.ok(!isRowFile("row.md.bak"), "an editor backup is not a row");
     assert.ok(!isRowFile(".hidden.md"), "the walk skips `.` entries, so the predicate must too");
     assert.ok(!isRowFile(".DS_Store.md"), "no `.`-prefixed file is a row, whatever its extension");
@@ -189,6 +190,241 @@ describe("load", () => {
       );
     } finally {
       rmSync(shard, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * A row may be a whole-document `.yml` file as readily as a `.md` one. The frontmatter of a `.md`
+ * row IS a YAML document; a store whose rows carry no prose was made to keep three lines of fence
+ * around it, and the alternative — rename them to `.yml` — made every row invisible to the loader
+ * with no error and no count. A validation gate then passes having read nothing, which is the
+ * failure mode this project exists to prevent.
+ */
+describe("yaml rows", () => {
+  /** A fixture store, torn down by the caller. */
+  const store = (prefix) => {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    return {
+      dir,
+      put(rel, text) {
+        mkdirSync(join(dir, rel, ".."), { recursive: true });
+        writeFileSync(join(dir, rel), text, "utf8");
+      },
+      rm: () => rmSync(dir, { recursive: true, force: true }),
+    };
+  };
+
+  test("a .yml row loads into the same shape a .md row does, with an empty body", () => {
+    // The document IS the columns — there is no fence and nothing after it. `_body` is "" rather
+    // than undefined so a view that reads a body off a mixed table gets a string from every row,
+    // not a null from half of them.
+    const s = store("gitdata-yaml-");
+    s.put("data/things/T-001--md.md", "---\nid: T-001\ntitle: From markdown\n---\nProse.\n");
+    s.put("data/things/T-002--yml.yml", "id: T-002\ntitle: From yaml\ntags: [a, b]\n");
+
+    try {
+      const rows = load(join(s.dir, "data")).get("things").rows;
+      assert.deepEqual(rows.map((r) => r.id), ["T-001", "T-002"]);
+      assert.deepEqual(rows.map((r) => r._file), ["T-001--md.md", "T-002--yml.yml"]);
+      const yaml = rows[1];
+      assert.equal(yaml.title, "From yaml");
+      assert.deepEqual(yaml.tags, ["a", "b"]);
+      assert.equal(yaml._body, "", "a .yml row has no body — the document is the whole row");
+    } finally {
+      s.rm();
+    }
+  });
+
+  test("a .yml row is queryable beside a .md row, body included", async () => {
+    // Both formats land in one table, so a view cannot tell them apart — which is the point.
+    const s = store("gitdata-yaml-sql-");
+    s.put("data/things/a.md", "---\nid: A\n---\nBody text.\n");
+    s.put("data/things/b.yml", "id: B\n");
+
+    try {
+      const db = await project(load(join(s.dir, "data")));
+      assert.deepEqual(query(db, "SELECT id, _body AS b FROM things ORDER BY id"), [
+        { id: "A", b: "Body text.\n" },
+        { id: "B", b: "" },
+      ]);
+      // md_section over an empty body answers "no such section", not a crash or a null.
+      assert.equal(query(db, "SELECT md_section(_body, 'Any') AS v FROM things WHERE id = 'B'")[0].v, "");
+      db.close();
+    } finally {
+      s.rm();
+    }
+  });
+
+  test("the non-row reservations apply to .yml exactly as they do to .md", () => {
+    // Each clause is a file somebody keeps beside their rows on purpose. `_owners.yml` is the one
+    // this repo itself writes into a table directory: widening the extension without carrying the
+    // `_` clause across would have loaded every ownership declaration as a row.
+    assert.ok(isRowFile("T-001--thing.yml"));
+    assert.ok(!isRowFile("_template.yml"), "`_` is the reservation for non-rows, whatever the extension");
+    assert.ok(!isRowFile("_owners.yml"), "the file `emit codeowners` reads is not data");
+    assert.ok(!isRowFile("readme.yml"));
+    assert.ok(!isRowFile("ReadMe.yml"), "case-insensitively, exactly like README.md");
+    assert.ok(!isRowFile(".hidden.yml"), "the walk skips `.` entries, so the predicate must too");
+    assert.ok(!isRowFile("row.yml.bak"), "an editor backup is not a row");
+    assert.ok(!isRowFile("notes.yaml"), "the accepted spelling is `.yml` — one spelling, or two files claim one row");
+  });
+
+  test("the loader and the enumerator agree about every .yml exclusion, against one directory", () => {
+    // Asserting the predicate alone would pass while the loader read the file anyway: the two
+    // answers only have to be compared against the same directory to catch a walk that widened
+    // and a predicate that did not, or the reverse.
+    const s = store("gitdata-yaml-excl-");
+    s.put("data/things/keep.yml", "id: KEEP\n");
+    s.put("data/things/_template.yml", "id: TEMPLATE\n");
+    s.put("data/things/_owners.yml", "owners: ['@someone']\n");
+    s.put("data/things/.hidden.yml", "id: HIDDEN\n");
+    s.put("data/things/readme.yml", "id: README\n");
+    s.put("data/things/notes.yaml", "id: NOTES\n");
+
+    try {
+      const table = join(s.dir, "data", "things");
+      assert.deepEqual(rowFilesIn(table), ["keep.yml"]);
+      assert.deepEqual(
+        load(join(s.dir, "data")).get("things").rows.map((r) => r._file),
+        ["keep.yml"],
+        "loader and predicate must answer identically",
+      );
+    } finally {
+      s.rm();
+    }
+  });
+
+  test("a sharded table finds its nested .yml rows, and mixes them with .md in one order", () => {
+    // The walk, not just the predicate. A consumer holding a widened predicate and its own flat
+    // `readdirSync` finds none of these — the second half of the contract `rowFilesIn` publishes.
+    const s = store("gitdata-yaml-shard-");
+    s.put("data/sessions/S-001--flat.yml", "id: S-001\n");
+    s.put("data/sessions/2026/01/S-002--jan.yml", "id: S-002\n");
+    s.put("data/sessions/2026/02/S-003--feb.md", "---\nid: S-003\n---\nFeb.\n");
+    s.put("data/sessions/2026/01/_draft.yml", "id: S-XXX\n");
+    s.put("data/sessions/2026/_scratch/S-999--no.yml", "id: S-999\n");
+    s.put("data/sessions/2026/readme.yml", "id: S-README\n");
+
+    try {
+      const rows = load(join(s.dir, "data")).get("sessions").rows;
+      assert.deepEqual(rows.map((r) => r._file), [
+        "2026/01/S-002--jan.yml",
+        "2026/02/S-003--feb.md",
+        "S-001--flat.yml",
+      ]);
+      assert.deepEqual(
+        rowFilesIn(join(s.dir, "data", "sessions")),
+        rows.map((r) => r._file),
+        "rowFilesIn disagreed with what load() read",
+      );
+    } finally {
+      s.rm();
+    }
+  });
+
+  test("`foo.md` and `foo.yml` in one table is a loud error naming both paths", () => {
+    // Two files, one row id. Picking either silently is a coin flip over which contract is live —
+    // and the loser keeps being edited by someone who believes it is the row.
+    const s = store("gitdata-yaml-clash-");
+    s.put("data/things/F-001--thing.md", "---\nid: F-001\n---\nProse.\n");
+    s.put("data/things/F-001--thing.yml", "id: F-001\n");
+
+    try {
+      const table = join(s.dir, "data", "things");
+      for (const [what, run] of [
+        ["load", () => load(join(s.dir, "data"))],
+        ["rowFilesIn", () => rowFilesIn(table)],
+        ["escapedRowFiles", () => escapedRowFiles(table)],
+      ]) {
+        assert.throws(
+          run,
+          (err) => {
+            assert.ok(err instanceof LoadError, `${what} threw ${err.constructor.name}, not LoadError`);
+            assert.match(err.message, /F-001--thing\.md/, `${what} did not name the .md file`);
+            assert.match(err.message, /F-001--thing\.yml/, `${what} did not name the .yml file`);
+            return true;
+          },
+          `${what} accepted two files claiming one row`,
+        );
+      }
+    } finally {
+      s.rm();
+    }
+  });
+
+  test("the collision rule is about one row, not one basename in two shards", () => {
+    // `2026/01/x.yml` and `2026/02/x.md` are two rows: `_file` is the id, and it differs. A
+    // collision check keyed on the basename alone would refuse a legitimately sharded table.
+    const s = store("gitdata-yaml-shardclash-");
+    s.put("data/sessions/2026/01/x.yml", "id: JAN\n");
+    s.put("data/sessions/2026/02/x.md", "---\nid: FEB\n---\n");
+
+    try {
+      assert.deepEqual(
+        load(join(s.dir, "data")).get("sessions").rows.map((r) => r.id),
+        ["JAN", "FEB"],
+      );
+    } finally {
+      s.rm();
+    }
+  });
+
+  test("a .yml row is checked by its table's schema exactly like a .md row", () => {
+    // The gate is the point of the change: a store that moves its rows to `.yml` and keeps
+    // `gitdata validate` in CI must keep being told when a row breaks its contract. Before the
+    // loader read them, this reported zero issues over zero rows — a green gate that read nothing.
+    const s = store("gitdata-yaml-validate-");
+    s.put(
+      "data/_schema/things.schema.yml",
+      "kind: table-schema\nrequired: [id, title]\nunique: [id]\nenum:\n  status: [idea, shipped]\n",
+    );
+    s.put("data/things/good.yml", "id: T-001\ntitle: Fine\nstatus: shipped\n");
+    s.put("data/things/bad.yml", "id: T-001\nstatus: nonsense\n");
+
+    try {
+      const { tables, issues } = validate({ dataRoot: join(s.dir, "data") });
+      assert.deepEqual(tables, ["things"]);
+      assert.deepEqual(
+        [...load(join(s.dir, "data")).keys()],
+        ["things"],
+        "`_schema/` stays reserved: widening the extension must not turn schema files into rows",
+      );
+      const at = (rule) => issues.filter((i) => i.rule === rule).map((i) => i.file).sort();
+      assert.deepEqual(at("required"), ["bad.yml"], "a missing required column in a .yml row");
+      assert.deepEqual(at("unique"), ["bad.yml", "good.yml"], "both rows sharing an id are named");
+      assert.deepEqual(at("enum"), ["bad.yml"], "a value outside the declared set");
+    } finally {
+      s.rm();
+    }
+  });
+
+  test("a .yml row that is not a mapping, or will not parse, fails loud naming the file", () => {
+    // Same contract a fence-less `.md` row gets: the loader never invents columns for a file it
+    // could not read as a mapping.
+    const s = store("gitdata-yaml-bad-");
+    s.put("data/things/list.yml", "- a\n- b\n");
+    try {
+      assert.throws(() => load(join(s.dir, "data")), (err) => {
+        assert.match(err.message, /things\/list\.yml/);
+        return true;
+      });
+    } finally {
+      s.rm();
+    }
+
+    const t = store("gitdata-yaml-fenced-");
+    // The migration mistake: rename a `.md` row and keep its fences. YAML reads that as two
+    // documents, so the error must say what a `.yml` row actually is instead of naming a parser.
+    t.put("data/things/fenced.yml", "---\nid: T-001\n---\nProse.\n");
+    try {
+      assert.throws(() => load(join(t.dir, "data")), (err) => {
+        assert.match(err.message, /things\/fenced\.yml/);
+        assert.match(err.message, /fence/i, "the error must name the fix, not just the parser's complaint");
+        return true;
+      });
+    } finally {
+      t.rm();
     }
   });
 });

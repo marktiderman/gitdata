@@ -744,9 +744,23 @@ describe("GD103 · artifact-lands-in-a-table", () => {
     }
   });
 
+  test("fires on a `.yml` artifact in a table now that a `.yml` file is a row", async () => {
+    // GD103 asks `isRowFile`, so widening what a row is widens what a generated artifact may not
+    // be named. A view emitting `data/things/board.yml` reads back as a row of `things` on the
+    // next load, exactly as `board.md` always did.
+    const r = repo();
+    try {
+      r.write("data/things/a.md", "---\nid: T-1\n---\nA.\n");
+      r.write("data/_views/v.view.yml", view("data/things/board.yml"));
+      assert.equal(of(await check(r.root), "GD103").length, 1);
+    } finally {
+      r.cleanup();
+    }
+  });
+
   test("does NOT fire on the shipped convention: data/_views/, an `_`-prefixed name, or outside data/", async () => {
     // The predicate that fires on `data/_views/board.md` would fail this project's own pack.
-    for (const out of ["data/_views/board.md", "data/things/_board.md", "docs/board.md", "data/board.md", "data/things/board.txt"]) {
+    for (const out of ["data/_views/board.md", "data/things/_board.md", "docs/board.md", "data/board.md", "data/things/board.txt", "data/things/_owners.yml"]) {
       const r = repo();
       try {
         r.write("data/things/a.md", "---\nid: T-1\n---\nA.\n");

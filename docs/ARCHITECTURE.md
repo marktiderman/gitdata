@@ -49,7 +49,8 @@ branch protection, CODEOWNERS, and required checks.
 ```text
 data/
   <table>/            folder = table
-    <row>.md          file = row · frontmatter = columns
+    <row>.md          file = row · frontmatter = columns · body = prose
+    <row>.yml         file = row · the document IS the columns · no body
     2026/01/<row>.md  nested rows belong to <table>; shard freely
     _template.md      `_` prefix = never a row
     README.md         documents the table; never a row
@@ -61,6 +62,15 @@ data/
 
 Column discovery is the union of frontmatter keys across a table's rows, so a table needs no
 declaration to be queryable: make a folder, add a row, query it.
+
+**A row is `.md` or `.yml`** — those two spellings and no others; `.yaml` is not a row extension,
+because two spellings of one extension is two files claiming one row. Every exclusion in the layout
+above holds for both: `_`-prefixed, `.`-prefixed, and `README` in either spelling. The frontmatter
+of a `.md` row is a YAML document, so a store whose
+rows are contract and no prose may drop the fences and name the file `.yml` — same columns, same
+schemas, same views, and `_body` is `""` instead of the prose. What is never legal is `<row>.md`
+and `<row>.yml` together: a row is its path without the extension, so that is one row with two
+contracts, and `load()` refuses it by name rather than picking one.
 
 **A table may nest.** Rows at any depth belong to the table folder at the top; a subfolder is a
 shard, not a table of its own, and only the first level under `data/` names a table. `_file`

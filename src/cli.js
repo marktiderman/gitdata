@@ -170,7 +170,7 @@ function cmdInit({ root, data, pack }) {
     if (pack) {
       console.log("  1. Add a row to a generated table — copy its _template.md if it has one");
     } else {
-      console.log(`  1. mkdir ${dataRel}/<table>, add a row (.md with frontmatter)`);
+      console.log(`  1. mkdir ${dataRel}/<table>, add a row (.md with frontmatter, or .yml)`);
       console.log(`     then declare a view in ${dataRel}/_views/<id>.view.yml`);
     }
     // A store that is not the default one is only reachable by naming it, so the commands we hand

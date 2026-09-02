@@ -619,9 +619,9 @@ function checkEngineRange({ policy }) {
  * This EXTENDS the `_` convention this project already ships; it does not invent a path law.
  * `src/load.js` skips every `_`-prefixed entry, so `out: data/_views/board.md` is already safe by
  * construction and is exactly what the bundled pack does. `out: data/features/board.md` is not:
- * that file has a `.md` extension, sits directly under a table, and satisfies `isRowFile()`, so
- * the artifact becomes a row of that table on the next `load()` — silently, which is the failure
- * this project exists to prevent.
+ * that file carries a row extension (`.md` or `.yml`), sits directly under a table, and satisfies
+ * `isRowFile()`, so the artifact becomes a row of that table on the next `load()` — silently,
+ * which is the failure this project exists to prevent.
  *
  * The rule is therefore not "artifacts never land in data/". It is the narrow one the loader
  * already guarantees: anywhere under `data/` that is not `_`-prefixed is rows.

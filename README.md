@@ -38,6 +38,12 @@ read data/ → parse frontmatter → load each folder as a table
 
 Folder = table. File = row. Frontmatter = columns. Git is the transaction log.
 
+A row is `<name>.md` — frontmatter plus a prose body — or `<name>.yml`, where the YAML document is
+the whole row and `_body` is empty. Both load into the same table, validate against the same
+schema, and feed the same views; a store whose rows are contract without commentary can drop the
+fences. `<name>.md` and `<name>.yml` side by side is one row with two contracts, and the loader
+refuses it by name rather than choosing.
+
 The database is **scratch paper** — it lives in memory for about a second and is thrown away. Git
 remains the only durable store. Nothing to host, back up, or keep in sync.
 

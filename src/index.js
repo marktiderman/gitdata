@@ -40,7 +40,9 @@ export { load, LoadError } from "./load.js";
 // that disagrees with the loader is a silent data loss on one side or a phantom row on the other.
 export { isRowFile, rowFilesIn, escapedRowFiles } from "./load.js";
 export { project, query, ProjectError } from "./project.js";
-export { parseFrontmatter, FrontmatterError } from "./frontmatter.js";
+// Both row spellings: fenced markdown, and a whole-document `.yml` row (empty body). A consumer
+// that reads a row file itself has to pick the same one the loader would.
+export { parseFrontmatter, parseYamlDocument, FrontmatterError } from "./frontmatter.js";
 export { renderTemplate, RenderError } from "./render.js";
 
 // Shapes: the registry, the dispatcher, and the error every shape throws.

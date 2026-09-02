@@ -125,8 +125,8 @@ The tempting rule is "derived artifacts never land inside `data/`". It is wrong,
 stronger than the defect requires: this project's own bundled pack writes
 `out: data/_views/features-board.md`, and that is correct.
 
-The actual footgun is narrower. `data/features/board.md` has a `.md` extension, sits under a table,
-and satisfies `isRowFile()` — so `load()` reads the generated artifact back as a **row of that
+The actual footgun is narrower. `data/features/board.md` has a row extension (`.md` or `.yml`),
+sits under a table, and satisfies `isRowFile()` — so `load()` reads the generated artifact back as a **row of that
 table** on the next run. Silently. The `_` prefix is what already prevents this, everywhere in the
 system, because the loader skips `_`-prefixed entries.
 
