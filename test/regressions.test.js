@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { after, before, describe, test } from "node:test";
 
 import { codeownersLines, emitCodeowners, EmitError, renderCodeowners } from "../src/emit-codeowners.js";
-import { parseFrontmatter, FrontmatterError } from "../src/frontmatter.js";
+import { parseFrontmatter, parseYamlDocument, FrontmatterError } from "../src/frontmatter.js";
 import { init } from "../src/init.js";
 import { assertReadOnly, describeTables, runQuery, QueryError } from "../src/introspect.js";
 import { load, LoadError } from "../src/load.js";
@@ -52,6 +52,41 @@ describe("frontmatter edge inputs", () => {
   test("a UTF-8 BOM does not hide the frontmatter block", () => {
     const { data } = parseFrontmatter("﻿---\nid: X-1\n---\nbody\n");
     assert.deepEqual(data, { id: "X-1" });
+  });
+
+  test("a YAML tag resolving to a Set, Map or Buffer is refused, in BOTH row spellings", () => {
+    // `typeof x === "object" && !Array.isArray(x)` is not a mapping test. The parser resolves
+    // YAML 1.1's known tags by default, so `!!set` arrives as a Set and `!!omap` as a Map — both
+    // pass that check, and `load()` spread them into a row with NO columns. `!!binary` is worse:
+    // a Buffer spreads into numeric ones. A row nobody can query, reported by nothing, is the
+    // silent drop this project exists to prevent.
+    //
+    // Pinned against both parsers together: the two spellings of a row must be exactly as strict
+    // as each other, or moving a file from `.md` to `.yml` changes what the loader accepts.
+    for (const [tag, doc] of [["set", "!!set\n? a\n? b\n"], ["omap", "!!omap\n- a: 1\n"], ["binary", "!!binary aGVsbG8=\n"]]) {
+      assert.throws(
+        () => parseYamlDocument(doc, { file: `x.yml` }),
+        (err) => {
+          assert.ok(err instanceof FrontmatterError);
+          assert.match(err.message, /is not a mapping — it is a/, `!!${tag} (.yml) was not named`);
+          return true;
+        },
+        `!!${tag} loaded as a .yml row instead of failing`,
+      );
+      assert.throws(
+        () => parseFrontmatter(`---\n${doc}---\n`, { file: `x.md` }),
+        (err) => {
+          assert.ok(err instanceof FrontmatterError);
+          assert.match(err.message, /is not a mapping — it is a/, `!!${tag} (.md) was not named`);
+          return true;
+        },
+        `!!${tag} loaded as a .md row instead of failing`,
+      );
+    }
+    // The ordinary mapping and the empty stub still pass, in both spellings.
+    assert.deepEqual(parseYamlDocument("id: X\n", { file: "x.yml" }).data, { id: "X" });
+    assert.deepEqual(parseYamlDocument("", { file: "x.yml" }).data, {});
+    assert.deepEqual(parseFrontmatter("---\nid: X\n---\n", { file: "x.md" }).data, { id: "X" });
   });
 
   test("still fails loud when there genuinely is no block", () => {

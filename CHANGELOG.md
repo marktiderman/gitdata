@@ -17,8 +17,10 @@ Entries are newest first, and each one answers the only question a consumer upgr
 
 ### Added — a row may be a `.yml` file, not only a `.md` one
 
-**Nothing you have today changes.** This widens what the loader accepts; it narrows nothing. Every
-`.md` row loads exactly as before, `_body` included.
+**Every `.md` row loads exactly as before, `_body` included.** Two things do change, and both are
+named in the table below: a `.yml` file already sitting inside a table directory becomes a row, and
+a view whose `out:` writes a `.yml` there now fails GD103. If neither describes your store, nothing
+you have today changes.
 
 What is new: `data/<table>/<row>.yml` is a row. The YAML document IS the columns — no fences, no
 body — and it loads into the same table, is checked by the same `data/_schema/<table>.schema.yml`,

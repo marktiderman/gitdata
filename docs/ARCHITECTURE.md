@@ -63,7 +63,10 @@ data/
 Column discovery is the union of frontmatter keys across a table's rows, so a table needs no
 declaration to be queryable: make a folder, add a row, query it.
 
-**A row is `.md` or `.yml`.** The frontmatter of a `.md` row is a YAML document, so a store whose
+**A row is `.md` or `.yml`** — those two spellings and no others; `.yaml` is not a row extension,
+because two spellings of one extension is two files claiming one row. Every exclusion in the layout
+above holds for both: `_`-prefixed, `.`-prefixed, and `README` in either spelling. The frontmatter
+of a `.md` row is a YAML document, so a store whose
 rows are contract and no prose may drop the fences and name the file `.yml` — same columns, same
 schemas, same views, and `_body` is `""` instead of the prose. What is never legal is `<row>.md`
 and `<row>.yml` together: a row is its path without the extension, so that is one row with two

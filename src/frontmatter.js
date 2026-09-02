@@ -21,6 +21,32 @@ const FENCE = /^---\r?\n(?:([\s\S]*?)\r?\n)?---\r?\n?/;
 
 export class FrontmatterError extends Error {}
 
+/**
+ * A row's columns must be a PLAIN mapping, and `typeof x === "object"` is not that test.
+ *
+ * The `yaml` parser resolves YAML 1.1's known tags by default, so `!!set` arrives as a `Set`,
+ * `!!omap` as a `Map`, and `!!binary` as a `Buffer`. Every one of them is an object, none is an
+ * array, and `load()` spreads them into a row — a `Set` becomes a row with NO columns and a
+ * `Buffer` a row with numeric ones, both without a word of complaint. A row nobody can query and
+ * nothing reported is the silent-drop this project exists to prevent, so the guard asks the
+ * question it means: is this an ordinary mapping?
+ *
+ * Found by review of the `.yml` change; it was already true of `.md` frontmatter, and both are
+ * fixed here rather than leaving the two spellings differently strict.
+ */
+const isPlainMapping = (value) => {
+  if (typeof value !== "object" || value === null) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+};
+
+/** What arrived instead, named — a rejection an author cannot act on is half a check. */
+const describeNonMapping = (value) => {
+  if (Array.isArray(value)) return "a list";
+  if (typeof value === "object" && value !== null) return `a ${Object.getPrototypeOf(value)?.constructor?.name ?? "non-plain object"}`;
+  return `a ${typeof value}`;
+};
+
 export function parseFrontmatter(text, { file = "<string>" } = {}) {
   // Editors that save UTF-8 with a BOM prepend U+FEFF, which would stop `^---` matching.
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
@@ -36,8 +62,8 @@ export function parseFrontmatter(text, { file = "<string>" } = {}) {
   // `--- \n ---` parses to null; treat an empty block as an empty mapping rather than an error,
   // but a scalar or list is a real authoring mistake and must fail loud.
   if (data == null) data = {};
-  if (typeof data !== "object" || Array.isArray(data)) {
-    throw new FrontmatterError(`${file}: frontmatter is not a mapping`);
+  if (!isPlainMapping(data)) {
+    throw new FrontmatterError(`${file}: frontmatter is not a mapping — it is ${describeNonMapping(data)}`);
   }
 
   return { data, body: text.slice(match[0].length) };
@@ -51,8 +77,8 @@ export function parseFrontmatter(text, { file = "<string>" } = {}) {
  * from half of them. `md_section("")` then answers "no such section", which is the truth.
  *
  * The parse is deliberately identical in strictness to the fenced one — an empty file is an empty
- * mapping, a scalar or a list is an authoring mistake and fails loud — so moving a row from `.md`
- * to `.yml` cannot quietly change what the loader will accept.
+ * mapping; a scalar, a list, or a tag resolving to something that is not a plain mapping fails
+ * loud — so moving a row from `.md` to `.yml` cannot quietly change what the loader will accept.
  */
 export function parseYamlDocument(text, { file = "<string>" } = {}) {
   // Editors that save UTF-8 with a BOM prepend U+FEFF; the YAML parser reads it as content.
@@ -71,8 +97,8 @@ export function parseYamlDocument(text, { file = "<string>" } = {}) {
   // An empty document parses to null. Same ruling as an empty frontmatter block: a stub row
   // awaiting its columns is not an error, but a scalar or a list is.
   if (data == null) data = {};
-  if (typeof data !== "object" || Array.isArray(data)) {
-    throw new FrontmatterError(`${file}: YAML document is not a mapping`);
+  if (!isPlainMapping(data)) {
+    throw new FrontmatterError(`${file}: YAML document is not a mapping — it is ${describeNonMapping(data)}`);
   }
 
   return { data, body: "" };

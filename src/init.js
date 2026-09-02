@@ -55,8 +55,8 @@ The gitdata trellis for this repo.
 
 Every \`.md\` or \`.yml\` file inside a table folder is a row; its frontmatter keys — or, for a
 \`.yml\` row, the document itself — become that table's columns. Files and folders prefixed with
-\`_\` are never rows (\`_template.md\`, \`_owners.yml\`, \`_views/\`, \`_schema/\`), and \`README.md\`
-documents rather than participates.
+\`_\` are never rows (\`_template.md\`, \`_owners.yml\`, \`_views/\`, \`_schema/\`), nor is anything
+\`.\`-prefixed, and \`README\` in either spelling documents rather than participates.
 
 Add a table by making a folder and putting a row in it — no declaration step:
 
